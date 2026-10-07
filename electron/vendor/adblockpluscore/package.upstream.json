@@ -1,0 +1,63 @@
+{
+  "name": "adblockpluscore",
+  "version": "0.11.1",
+  "repository": "https://gitlab.com/eyeo/adblockplus/abc/adblockpluscore.git",
+  "license": "GPL-3.0-only",
+  "engines": {
+    "node": ">=16.10.0",
+    "npm": ">=7"
+  },
+  "dependencies": {
+    "tar": "^6.1.10",
+    "yargs": "17.3.0"
+  },
+  "devDependencies": {
+    "@eyeo/get-browser-binary": "^0.3.0",
+    "babel-eslint": "^10.1.0",
+    "c8": "^7.1.2",
+    "chai": "^4.2.0",
+    "chrome-remote-interface": "^0.30.0",
+    "chromedriver": "2.36.0",
+    "eslint": "^7.32.0",
+    "eslint-config-eyeo": "^3.1.0",
+    "geckodriver": "^3.0.2",
+    "got": "^11.1.3",
+    "jsdoc": "^3.6.7",
+    "jsdoc-to-markdown": "^7.1.1",
+    "memory-fs": "0.4.1",
+    "mocha": "^9.1.2",
+    "nock": "^13.2.1",
+    "sandboxed-module": "2.0.4",
+    "script-loader": "0.7.0",
+    "selenium-webdriver": "^4.0.0-alpha",
+    "terser": "^5.6.0",
+    "webpack": "^4.41.6"
+  },
+  "scripts": {
+    "jsdoc": "jsdoc --configure .jsdoc.conf --destination build/docs lib",
+    "docs": "npm run jsdoc",
+    "benchmark:easylist": "FL=\"EasyList\"; node benchmark/list-checker.js --filter-list=$FL && node --expose-gc benchmark.js --filter-list=$FL",
+    "benchmark:easylist+AA": "FL=\"EasyList+AA\"; node benchmark/list-checker.js --filter-list=$FL && node --expose-gc benchmark.js --filter-list=$FL",
+    "benchmark:allFilters": "FL=\"All\"; node benchmark/list-checker.js --filter-list=$FL && node --expose-gc benchmark.js --filter-list=$FL",
+    "benchmark:match:slowlist": "node --expose-gc benchmark.js --match-list=slowlist --match",
+    "benchmark:match:unitlist": "node --expose-gc benchmark.js --match-list=unitlist --match",
+    "benchmark:match:all": "node --expose-gc benchmark.js --match-list=all --match",
+    "benchmark:match:all:easylist": "npm run benchmark:match:all -- --filter-list=EasyList",
+    "benchmark:match:all:easylist+AA": "npm run benchmark:match:all -- --filter-list=EasyList+AA",
+    "benchmark:match:all:allFilters": "npm run benchmark:match:all -- --filter-list=All",
+    "benchmark": "npm run benchmark:easylist && npm run benchmark:easylist+AA && npm run benchmark:allFilters && npm run benchmark:match:all && npm run benchmark:match:all:easylist+AA",
+    "benchmark:save": "FLAGS=\"--save --save-temp --ts=$(date +%FT%TZ)\"; npm run benchmark:easylist -- $FLAGS && npm run benchmark:easylist+AA -- $FLAGS && npm run benchmark:allFilters -- $FLAGS && npm run benchmark:match:all -- $FLAGS && npm run benchmark:match:all:easylist -- $FLAGS && npm run benchmark:match:all:easylist+AA -- $FLAGS && npm run benchmark:match:all:allFilters -- $FLAGS --dt",
+    "benchmark:compare": "npm run benchmark:save -- --compare",
+    "benchmark:cleanup": "node --expose-gc benchmark.js -- --cleanup",
+    "lint": "eslint *.js *.mjs lib benchmark test scripts",
+    "minify": "mkdir -p dist && node minify.js && cp -R lib/content dist",
+    "unit-tests": "c8 --include=lib/*.js --include=scripts/*.js --include=lib/filters/*.js --include=lib/dnr/*.js --exclude=lib/index.js --exclude=lib/jsbn.js --exclude=lib/rusha.js --all mocha --check-leaks",
+    "test": "LIB_FOLDER=lib node test_runner.mjs",
+    "test:dist": "npm run minify && LIB_FOLDER=dist node test_runner.mjs",
+    "posttest": "npm run lint",
+    "update-resources": "node scripts/updateResources.js",
+    "updatepsl": "node scripts/updatepsl.js",
+    "update-subscriptions": "node scripts/updateSubscriptions.js"
+  },
+  "main": "lib"
+}

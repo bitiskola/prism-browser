@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'">
+  <title>Prism Browser</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header class="titlebar">
+      <a class="wordmark" href="#" id="brand-home" aria-label="Prism home"><span class="brand-symbol"></span>prism<span class="wordmark-dot">.</span></a>
+      <div id="tabs" class="tabs" role="tablist" aria-label="Browser tabs"></div>
+      <button class="icon-button new-tab" id="new-tab" title="New tab (Ctrl+T)" aria-label="New tab" data-icon="plus"></button>
+      <div class="titlebar-spacer"></div>
+      <div class="window-controls"><button id="window-minimize" aria-label="Minimize" data-icon="minus"></button><button id="window-maximize" aria-label="Maximize" data-icon="square"></button><button id="window-close" aria-label="Close window" data-icon="close"></button></div>
+    </header>
+    <div class="toolbar">
+      <div class="navigation"><button class="icon-button" id="back" aria-label="Go back" title="Go back" data-icon="arrow-left"></button><button class="icon-button" id="forward" aria-label="Go forward" title="Go forward" data-icon="arrow-right"></button><button class="icon-button" id="reload" aria-label="Reload" title="Reload (Ctrl+R)" data-icon="reload"></button></div>
+      <form id="address-form" class="address-bar"><span id="address-icon" data-icon="search"></span><input id="address" type="text" aria-label="Search or enter a website address" placeholder="Search or enter a website address" spellcheck="false" autocomplete="off"><span id="address-security" class="address-security">NEW TAB</span><button type="button" id="bookmark-toggle" class="icon-button" title="Bookmark this page" aria-label="Bookmark this page" data-icon="star"></button></form>
+      <div class="privacy-tools" aria-label="Browsing controls">
+        <button id="focus-toggle" class="toolbar-button" aria-pressed="false" aria-label="Toggle spoof mode for this site" title="Spoof mode: best-effort focus, visibility, selection, and keyboard listener controls"><span data-icon="focus"></span><span class="toolbar-label">Spoof mode</span></button>
+        <button id="proxy-shortcut" class="toolbar-button" aria-label="Configure proxy" title="Proxy: direct connection · Open settings"><span data-icon="route"></span><span class="toolbar-label">Proxy</span><span id="proxy-indicator" class="tool-indicator" aria-hidden="true"></span></button>
+        <div class="toolbar-split"><button id="adblock-toggle" class="toolbar-button" aria-pressed="true" aria-label="Toggle ad blocker" title="Ad blocker"><span data-icon="shield"></span><span class="toolbar-label">Ad blocker</span><span id="adblock-count" class="toolbar-count">0</span></button><button id="adblock-settings-shortcut" class="toolbar-mini" aria-label="Ad blocker settings" title="Ad blocker settings" data-icon="chevron-down"></button></div>
+      </div>
+      <span class="toolbar-divider"></span><button id="tools-toggle" class="icon-button" title="Inspection panel" aria-label="Toggle inspection panel" data-icon="panel"></button>
+    </div>
+    <div id="find-bar" class="find-bar" hidden><span data-icon="search"></span><input id="find-input" aria-label="Find on page" placeholder="Find on page"><button class="icon-button" id="find-previous" aria-label="Previous match" data-icon="arrow-up"></button><button class="icon-button" id="find-next" aria-label="Next match" data-icon="arrow-down"></button><button class="icon-button" id="find-close" aria-label="Close find" data-icon="close"></button></div>
+    <div class="workspace">
+      <nav class="rail" aria-label="Browser tools">
+        <button class="rail-button" data-pane="network" title="Network inspector" aria-label="Network inspector"><span data-icon="activity"></span><span class="rail-active-dot"></span></button>
+        <button class="rail-button" data-pane="bookmarks" title="Bookmarks" aria-label="Bookmarks"><span data-icon="bookmark"></span></button>
+        <button class="rail-button" data-pane="history" title="History" aria-label="History"><span data-icon="history"></span></button>
+        <button class="rail-button" data-pane="downloads" title="Downloads" aria-label="Downloads"><span data-icon="download"></span><span id="downloads-badge" class="rail-badge" hidden></span></button>
+        <div class="rail-line"></div><button class="rail-button" id="open-devtools" title="Developer tools" aria-label="Developer tools"><span data-icon="code"></span></button>
+        <div class="rail-spacer"></div><button class="rail-button" data-pane="settings" title="Site controls and settings" aria-label="Site controls and settings"><span data-icon="settings"></span></button><span class="profile-avatar" title="Local profile">P</span>
+      </nav>
+      <main id="main-surface" class="main-surface">
+        <div id="viewport"></div>
+        <section id="newtab" class="newtab" aria-label="New tab">
+          <div class="newtab-topline"><span class="workspace-label"><span class="tiny-square"></span>YOUR PERSONAL WORKSPACE</span><span id="preview-label" class="environment-badge"><span class="status-dot"></span>LOCAL PROFILE</span></div>
+          <div class="home-content">
+            <div class="welcome-eyebrow"><span class="status-dot"></span> A dedicated space to explore the web.</div>
+            <h1>Browse. Inspect.<br><span>Stay in control.</span></h1>
+            <p class="welcome-copy">Separate sessions. Site controls. A clearer view of the web.</p>
+            <form id="home-search" class="home-search"><span data-icon="search"></span><input id="home-address" aria-label="Search the web or enter a URL" placeholder="Where would you like to go?" autocomplete="off"><span class="key-hint">Ctrl K</span><button class="home-go" aria-label="Open website or search" data-icon="arrow-right"></button></form>
+            <div class="section-heading"><span>YOUR SHORTCUTS</span><button id="shortcut-add" class="text-button"><span data-icon="plus"></span>Add shortcut</button></div>
+            <div id="shortcuts" class="shortcuts"></div>
+            <div class="home-cards">
+              <button class="feature-card inspect-card" data-open-pane="network"><div class="card-top"><span class="card-icon purple" data-icon="activity"></span><span data-icon="arrow-up-right"></span></div><h2>See beneath the surface</h2><p>Inspect requests, responses, and live connections from the sites you choose.</p><span class="card-link">Open network inspector <span data-icon="arrow-right"></span></span></button>
+              <button class="feature-card" data-open-pane="settings"><div class="card-top"><span class="card-icon mint" data-icon="sliders"></span><span data-icon="arrow-up-right"></span></div><h2>Your sites. Your rules.</h2><p>Choose your search engine, route through a proxy, and control what gets blocked.</p><span class="card-link mint-text">Open browser settings <span data-icon="arrow-right"></span></span></button>
+            </div>
+          </div>
+          <div class="newtab-footer"><span><span data-icon="shield"></span>Separate profile. Persistent sessions.</span><span>Made for curious minds.</span></div>
+        </section>
+        <section id="page-error" class="page-error" hidden></section>
+      </main>
+      <aside id="side-panel" class="side-panel" aria-label="Browser tools"></aside>
+    </div>
+    <footer class="statusbar"><span><span class="status-dot"></span><span id="profile-status">Persistent local session</span></span><span class="statusbar-center"><span id="site-status" aria-live="polite">Ready to explore</span><button id="focus-retry" class="focus-retry" hidden>Retry spoof mode</button></span><div><span id="request-count">0 requests</span><span class="status-separator"></span><button id="zoom-out" title="Zoom out" aria-label="Zoom out" data-icon="minus"></button><span id="zoom-label">100%</span><button id="zoom-in" title="Zoom in" aria-label="Zoom in" data-icon="plus"></button></div></footer>
+  </div>
+  <dialog id="modal"><div id="modal-content"></div></dialog>
+  <div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
