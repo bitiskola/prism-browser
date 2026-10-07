@@ -3,3 +3,4 @@ dist/
 .profile/
 test-results/
 *.log
+.DS_Store
