@@ -105,7 +105,7 @@ test('reapplying is idempotent and current-context navigation away restores orig
   const firstListeners = [...fixture.listeners].map(([name, set]) => [name, [...set]]);
   fixture.apply(rules);
   assert.deepEqual([...fixture.listeners].map(([name, set]) => [name, [...set]]), firstListeners);
-  assert.equal([...fixture.listeners.values()].reduce((n, set) => n + set.size, 0), 17);
+  assert.equal([...fixture.listeners.values()].reduce((n, set) => n + set.size, 0), 25);
   fixture.document.location.href = 'https://other.test';
   fixture.apply(rules);
   assert.deepEqual(Object.getOwnPropertyDescriptor(fixture.document, 'hasFocus'), originalDescriptor);
@@ -123,6 +123,25 @@ test('trusted key, selection and clipboard listeners are suppressed without canc
   }
   fixture.apply([]);
   assert.equal(fixture.dispatch('keydown', fixture.document), false);
+});
+
+test('trusted cursor boundary events are suppressed until spoof mode is disabled', () => {
+  const fixture = page('https://example.com');
+  const rules = [{ host: 'example.com', focus: true }];
+  fixture.apply(rules);
+  fixture.apply(rules);
+  const types = ['mouseenter', 'mouseleave', 'mouseover', 'mouseout', 'pointerenter', 'pointerleave', 'pointerover', 'pointerout'];
+  for (const type of types) {
+    for (const target of [fixture.window, fixture.document, { tagName: 'BUTTON' }]) {
+      assert.equal(fixture.dispatch(type, target), true, type);
+      assert.equal(fixture.dispatch(type, target, false), false, `synthetic ${type}`);
+    }
+  }
+  for (const type of ['mousemove', 'pointermove', 'mousedown', 'pointerdown', 'mouseup', 'pointerup', 'click']) {
+    assert.equal(fixture.dispatch(type, fixture.document), false, `${type} remains functional`);
+  }
+  fixture.apply([]);
+  for (const type of types) assert.equal(fixture.dispatch(type, fixture.document), false, `restored ${type}`);
 });
 
 test('selection masking leaves native selection and input setters intact, then restores all prototypes', () => {

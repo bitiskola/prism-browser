@@ -140,7 +140,10 @@ function patchDocument(rules) {
     // Never preventDefault here: Chromium must still type, select and copy/paste.
     if (event.isTrusted) event.stopImmediatePropagation();
   };
-  for (const name of ['keydown', 'keyup', 'keypress', 'selectionchange', 'selectstart', 'select', 'copy', 'cut', 'paste']) {
+  // Boundary events also expose when the cursor enters or leaves the page.
+  // Include over/out because sites often use those bubbling equivalents.
+  for (const name of ['keydown', 'keyup', 'keypress', 'selectionchange', 'selectstart', 'select', 'copy', 'cut', 'paste',
+    'mouseenter', 'mouseleave', 'mouseover', 'mouseout', 'pointerenter', 'pointerleave', 'pointerover', 'pointerout']) {
     window.addEventListener(name, stop, true);
     listeners.push([name, stop]);
   }

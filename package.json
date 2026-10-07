@@ -82,6 +82,7 @@
       "target": [
         "dmg"
       ],
+      "identity": null,
       "category": "public.app-category.developer-tools"
     }
   }

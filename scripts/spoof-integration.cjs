@@ -14,6 +14,7 @@ let app;
 let shell;
 let url;
 let clipboard;
+const cursorEvents = ['mouseenter','mouseleave','mouseover','mouseout','pointerenter','pointerleave','pointerover','pointerout'];
 const server = http.createServer((request, response) => {
   response.writeHead(200, { 'Content-Type': 'text/html' });
   response.end(`<!doctype html><html><head><style>
@@ -24,6 +25,13 @@ const server = http.createServer((request, response) => {
     window.seen=[]; window.clicked=0;
     for(const type of ['keydown','keyup','keypress','selectionchange','selectstart','select','copy','cut','paste','blur','focusout','visibilitychange'])
       window.addEventListener(type,event=>window.seen.push({type,target:event.target.id||event.target.nodeName||'window'}),true);
+    window.cursorSeen=[];
+    for(const type of ${JSON.stringify(cursorEvents)}) {
+      for(const target of [window,document,document.querySelector('#button')]) {
+        for(const capture of [true,false]) target.addEventListener(type,event=>window.cursorSeen.push({type,trusted:event.isTrusted}),capture);
+      }
+      document.querySelector('#button')['on'+type]=event=>window.cursorSeen.push({type,trusted:event.isTrusted});
+    }
     document.addEventListener('mousedown',event=>event.preventDefault());
     document.querySelector('#button').addEventListener('click',()=>window.clicked++);
     window.ready=true;
@@ -61,6 +69,19 @@ async function key(keyCode, modifiers = []) {
 async function click(selector) {
   const point = await page(`(() => { const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}; })()`);
   await input([{type:'mouseDown',button:'left',clickCount:1,...point}, {type:'mouseUp',button:'left',clickCount:1,...point}]);
+}
+async function moveCursorAcrossButton() {
+  const point = await page('(() => {const r=document.querySelector("#button").getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()');
+  await input([{type:'mouseMove',x:1,y:1}]);
+  await page('window.cursorSeen=[]');
+  await input([{type:'mouseMove',...point}]);
+  await input([{type:'mouseMove',x:1,y:1}]);
+  await input([{type:'mouseLeave',x:1,y:1}]);
+}
+async function assertCursorRestored() {
+  await moveCursorAcrossButton();
+  const restored = await page('cursorSeen.filter(event=>event.trusted).map(event=>event.type)');
+  for (const type of cursorEvents) assert.ok(restored.includes(type), `${type} restored after disabling`);
 }
 async function run() {
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'prism-spoof-'));
@@ -137,6 +158,19 @@ async function run() {
     // The same rule refreshes after page listeners have been installed. It must
     // not move protection behind those listeners in the capture phase.
     await invoke('rules-save', {rules:[{host:'127.0.0.1',focus:true,monitor:false,includeSubdomains:false}]});
+    await moveCursorAcrossButton();
+    assert.deepEqual(await page('cursorSeen'), [], 'trusted cursor boundaries never reach capture, bubble or property handlers');
+    await page('button.dispatchEvent(new MouseEvent("mouseenter"))');
+    assert.equal(await page('cursorSeen.some(event=>event.type==="mouseenter" && !event.trusted)'), true, 'synthetic cursor events remain functional');
+    console.log('PASS trusted mouse and pointer boundaries suppressed after repeated refresh');
+    if (process.env.PRISM_CURSOR_CHECK_ONLY === '1') {
+      await click('#button');
+      assert.equal(await page('window.clicked'), 1, 'click handlers remain functional');
+      await invoke('rules-save', {rules:[]});
+      await assertCursorRestored();
+      console.log('PASS native cursor boundaries restored on live opt-out and click handlers preserved');
+      return;
+    }
     await page('window.seen=[]');
     await click('#first');
     assert.equal(await page('document.activeElement.id'), 'first', 'mousedown cancellation cannot block native focus');
@@ -195,6 +229,7 @@ async function run() {
     console.log('PASS selected page focus state across native window switch');
 
     await invoke('rules-save', {rules:[]});
+    await assertCursorRestored();
     assert.equal(await page('getComputedStyle(document.querySelector("#selection")).userSelect'), 'none', 'original selection style restored');
     assert.match(await page('(() => {const r=document.createRange();r.selectNodeContents(document.querySelector("#button"));getSelection().removeAllRanges();getSelection().addRange(r);return String(getSelection());})()'), /Working button/, 'native selected text becomes readable again');
     assert.equal(await page('first.focus();first.setSelectionRange(1,3);first.selectionEnd'), 3, 'native input selection becomes readable again');

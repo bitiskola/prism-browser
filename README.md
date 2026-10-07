@@ -119,6 +119,7 @@ The toolbar shows **Applying…** while a change is being applied and turns gree
 When checking a focus-event test page, enable the mode, wait for the green state, and reload once to clear its earlier event log. Then look for newly added BLUR events when switching away. Enabling can emit a FOCUS notification; events logged before activation remain part of that page's history.
 
 - Page keyboard, selection and clipboard listeners are suppressed for trusted `keydown`, `keyup`, `keypress`, `selectionchange`, `selectstart`, `select`, `copy`, `cut` and `paste` events. Native typing, text selection and Ctrl+C/Ctrl+V remain available.
+- Trusted mouse and pointer enter, leave, over and out listeners are suppressed, including on page elements. Cursor movement and click handlers keep working; hover controls driven by these boundary events may need spoof mode turned off.
 - Common Selection API readers report an empty selection; input and textarea selection offsets are masked. Chromium retains the actual selection for native copying and editing.
 - Primary mouse/pointer-down cancellation and `user-select: none` restrictions on the clicked text are relaxed so selection and input focus work. Ordinary click handlers keep running. This does not remove disabled form controls or arbitrary overlays.
 
