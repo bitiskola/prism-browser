@@ -40,6 +40,7 @@ let pendingNewTabSearch = null;
 let requestedSearchTabId = null;
 let pendingRulesSave = null;
 let stateEventVersion = 0;
+let draggedTabId = null;
 const activeTab = () => state.tabs.find(tab => tab.id === state.activeTabId);
 const isHome = () => !activeTab()?.url || activeTab().url === 'about:blank' || activeTab().url === 'prism://newtab';
 const hostname = url => { try { return new URL(url).hostname.toLowerCase().replace(/\.$/, ''); } catch { return ''; } };
@@ -75,6 +76,16 @@ function makePreviewBridge() {
       case 'tab-new': { const tab = {id:uid(),url:payload.url ? safeURL(payload.url) : 'about:blank',title:'New tab',zoom:1}; data.tabs.push(tab);data.activeTabId=tab.id;break; }
       case 'tab-close': data.tabs=data.tabs.filter(tab=>tab.id!==payload.id); if (!data.tabs.length) data.tabs.push({id:uid(),url:'about:blank',title:'New tab',zoom:1}); if(!data.tabs.some(tab=>tab.id===data.activeTabId)) data.activeTabId=data.tabs.at(-1).id;break;
       case 'tab-activate': data.activeTabId=payload.id;break;
+      case 'tab-reorder': {
+        if (typeof payload.id !== 'string' || (payload.beforeId !== null && typeof payload.beforeId !== 'string')) throw new Error('Invalid tab order.');
+        const sourceIndex=data.tabs.findIndex(tab=>tab.id===payload.id);
+        const targetIndex=payload.beforeId===null?-1:data.tabs.findIndex(tab=>tab.id===payload.beforeId);
+        if(sourceIndex<0 || (payload.beforeId!==null && targetIndex<0) || payload.id===payload.beforeId) break;
+        const [source]=data.tabs.splice(sourceIndex,1);
+        const insertAt=payload.beforeId===null?data.tabs.length:data.tabs.findIndex(tab=>tab.id===payload.beforeId);
+        data.tabs.splice(insertAt,0,source);
+        break;
+      }
       case 'navigate': current.url=safeURL(payload.url);current.title=hostname(current.url)||'New tab';break;
       case 'rules-save': data.rules=payload.rules;break;
       case 'search-save': data.search={...payload.search};break;
@@ -129,8 +140,8 @@ function renderTabs() {
     const label = $('.tab-label', node), image = $('.tab-favicon', node);
     const title = tab.title || hostname(tab.url) || 'New tab';
     node.classList.toggle('active', selected);node.classList.toggle('loading', !!tab.loading);
-    label.dataset.tab = tab.id;label.setAttribute('aria-selected', String(selected));label.setAttribute('aria-label', title);label.tabIndex = selected ? 0 : -1;
-    label.title = `${title}${tab.url && tab.url !== 'about:blank' ? `\n${tab.url}` : ''}\nMiddle-click to close · Ctrl+W closes the active tab`;
+    label.dataset.tab = tab.id;label.setAttribute('aria-selected', String(selected));label.setAttribute('aria-label', title);label.tabIndex = selected ? 0 : -1;label.draggable = true;
+    label.title = `${title}${tab.url && tab.url !== 'about:blank' ? `\n${tab.url}` : ''}\nDrag to reorder · Middle-click to close · Ctrl+W closes the active tab`;
     $('.tab-title', node).textContent = title;
     const close = $('.tab-close', node);close.dataset.closeTab = tab.id;close.setAttribute('aria-label', `Close ${title}`);close.tabIndex = selected ? 0 : -1;
     const fallback = tab.loading ? 'reload' : hostname(tab.url) ? 'globe' : 'prism';
@@ -165,6 +176,32 @@ function updateTabDensity() {
   const wrapped = count * 22 > available + 1;
   strip.classList.toggle('wrapped-tabs', wrapped);
   $('.titlebar').classList.toggle('wrapped-tabs', wrapped);
+}
+function clearTabDragState() {
+  draggedTabId = null;
+  $$('.tab.dragging,.tab.drop-before,.tab.drop-after').forEach(node => node.classList.remove('dragging','drop-before','drop-after'));
+  $('#tabs').classList.remove('drop-end');
+}
+function tabOrderBefore(sourceId, targetId, after) {
+  const order = state.tabs.map(tab => tab.id).filter(id => id !== sourceId);
+  const targetIndex = order.indexOf(targetId);
+  if (targetIndex < 0) return null;
+  const insertionIndex = targetIndex + (after ? 1 : 0);
+  return order[insertionIndex] || null;
+}
+async function finishTabDrop(event) {
+  event.preventDefault();
+  if (!draggedTabId) return clearTabDragState();
+  const sourceId = draggedTabId;
+  const target = event.target.closest?.('[data-tab-id]');
+  const targetId = target?.dataset.tabId || null;
+  const after = targetId ? target.classList.contains('drop-after') : true;
+  const beforeId = targetId ? tabOrderBefore(sourceId, targetId, after) : null;
+  clearTabDragState();
+  if (!targetId || targetId !== sourceId) {
+    const result = await invoke('tab-reorder', { id: sourceId, beforeId });
+    if (result?.tabs) renderState(result);
+  }
 }
 function focusNewTabSearch(tabId) {
   if (tabId !== state.activeTabId || !isHome()) {requestedSearchTabId = tabId;return;}
@@ -448,6 +485,43 @@ document.addEventListener('input',event=>{if(event.target.id==='request-search')
 document.addEventListener('change',event=>{if(event.target.closest('.settings-form'))captureSettingsDraft(event.target);});
 $('#new-tab').addEventListener('click',newBlankTab);
 $('#brand-home').addEventListener('click',event=>{event.preventDefault();newBlankTab();});
+$('#tabs').addEventListener('dragstart',event=>{
+  const label=event.target.closest?.('.tab-label');
+  const tab=label?.closest('.tab');
+  if(!tab)return;
+  draggedTabId=tab.dataset.tabId;
+  event.dataTransfer.effectAllowed='move';
+  event.dataTransfer.setData('text/plain',draggedTabId);
+  tab.classList.add('dragging');
+});
+$('#tabs').addEventListener('dragover',event=>{
+  if(!draggedTabId)return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect='move';
+  const target=event.target.closest?.('[data-tab-id]');
+  $$('.tab.drop-before,.tab.drop-after').forEach(node=>node.classList.remove('drop-before','drop-after'));
+  $('#tabs').classList.remove('drop-end');
+  if(!target||target.dataset.tabId===draggedTabId){
+    $('#tabs').classList.add('drop-end');
+    return;
+  }
+  const after=event.clientX>=target.getBoundingClientRect().left+target.getBoundingClientRect().width/2;
+  target.classList.add(after?'drop-after':'drop-before');
+});
+$('#tabs').addEventListener('drop',finishTabDrop);
+$('#tabs').addEventListener('dragend',clearTabDragState);
+$('#tabs').addEventListener('click',event=>{
+  const tab=event.target.closest?.('.tab');
+  if(!tab||!$('#tabs').classList.contains('icon-tabs'))return;
+  const close=event.target.closest?.('.tab-close');
+  const rect=tab.getBoundingClientRect();
+  const closeRegion=event.clientX>=rect.right-9;
+  if(close||closeRegion){
+    event.preventDefault();
+    event.stopPropagation();
+    invoke('tab-close',{id:tab.dataset.tabId});
+  }
+});
 $('#tabs').addEventListener('auxclick',event=>{if(event.button!==1)return;const tab=event.target.closest('[data-tab-id]');if(tab){event.preventDefault();invoke('tab-close',{id:tab.dataset.tabId});}});
 $('#tabs').addEventListener('mousedown',event=>{if(event.button===1)event.preventDefault();});
 $('#tabs').addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;const index=state.tabs.findIndex(tab=>tab.id===event.target.dataset.tab);if(index<0)return;event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?state.tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+state.tabs.length)%state.tabs.length;const tab=state.tabs[next];invoke('tab-activate',{id:tab.id});$$('.tab-label').find(button=>button.dataset.tab===tab.id)?.focus();});

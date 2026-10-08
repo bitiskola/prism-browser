@@ -1,6 +1,6 @@
 'use strict';
 const { contextBridge, ipcRenderer } = require('electron');
-const actions = new Set(['get-state','search-save','proxy-save','adblock-save','tab-new','tab-close','tab-activate','navigate','back','forward','reload','stop','viewport','bookmark-toggle','history-clear','rules-save','focus-retry','network-list','network-detail','network-clear','network-pause','network-export','cookies-list','cookies-export','cookies-import','site-data-clear','downloads-list','download-cancel','download-show','find','find-stop','zoom','devtools','window-minimize','window-maximize','window-close']);
+const actions = new Set(['get-state','search-save','proxy-save','adblock-save','tab-new','tab-close','tab-activate','tab-reorder','navigate','back','forward','reload','stop','viewport','bookmark-toggle','history-clear','rules-save','focus-retry','network-list','network-detail','network-clear','network-pause','network-export','cookies-list','cookies-export','cookies-import','site-data-clear','downloads-list','download-cancel','download-show','find','find-stop','zoom','devtools','window-minimize','window-maximize','window-close']);
 const events = new Set(['state','network-entry','network-removed','network-cleared','network-status','toast','shortcut','find-result']);
 contextBridge.exposeInMainWorld('prism', Object.freeze({
   invoke(action, payload = {}) {

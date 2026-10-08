@@ -36,8 +36,19 @@ const assert = require('node:assert/strict');
             listeners.shortcut?.({action:'new-tab-search',tabId:tab.id});
           } else if(action==='tab-activate') publish({activeTabId:payload.id});
           else if(action==='tab-close') {
+            const index=state.tabs.findIndex(tab=>tab.id===payload.id);
             const tabs=state.tabs.filter(tab=>tab.id!==payload.id);
-            publish({tabs,activeTabId:state.activeTabId===payload.id?tabs.at(-1)?.id:state.activeTabId});
+            const activeTabId=state.activeTabId===payload.id?tabs[index] ? tabs[index].id : tabs[index-1]?.id:state.activeTabId;
+            publish({tabs,activeTabId});
+          } else if(action==='tab-reorder') {
+            const sourceIndex=state.tabs.findIndex(tab=>tab.id===payload.id);
+            const targetIndex=payload.beforeId===null?-1:state.tabs.findIndex(tab=>tab.id===payload.beforeId);
+            if(sourceIndex>=0 && (payload.beforeId===null || targetIndex>=0) && payload.id!==payload.beforeId) {
+              const tabs=state.tabs.slice(), [source]=tabs.splice(sourceIndex,1);
+              const insertAt=payload.beforeId===null?tabs.length:tabs.findIndex(tab=>tab.id===payload.beforeId);
+              tabs.splice(insertAt,0,source);
+              publish({tabs});
+            }
           } else if(action==='navigate') publish({tabs:state.tabs.map(tab=>tab.id===state.activeTabId?{...tab,url:payload.url,title:payload.url}:tab)});
           else return;
           return structuredClone(state);
@@ -87,13 +98,25 @@ const assert = require('node:assert/strict');
     assert.ok(geometry.every(r=>r.width>=21&&r.x>=0&&r.right<=1000),'every compact tab stays visible');
     assert.equal(await page.locator('#tabs').evaluate(node=>node.scrollWidth<=node.clientWidth+1),true,'tab strip does not require swiping');
     assert.equal(await page.locator('.tab-title').first().isVisible(),false,'densest tabs display icons only');
-    await page.locator('[data-tab="many-29"] .tab-favicon').click();
+    await page.locator('[data-tab="many-29"]').click();
     assert.equal(await page.locator('[data-tab="many-29"]').getAttribute('aria-selected'),'true','favicon is a clickable tab target');
     assert.match(await page.locator('[data-tab="many-29"]').getAttribute('aria-label'),/Website 30/);
+    assert.equal(await page.locator('[data-tab-id="many-29"] .tab-close').isVisible(),true,'selected compact tabs expose their close button');
+    assert.equal(await page.locator('[data-tab-id="many-0"] .tab-close').isVisible(),false,'inactive compact tabs keep close buttons hidden');
+    await page.locator('[data-tab="many-29"]').dragTo(page.locator('[data-tab="many-0"]'));
+    await page.waitForFunction(()=>[...document.querySelectorAll('#tabs > .tab')].map(node=>node.dataset.tabId)[0]==='many-29');
+    assert.equal(await page.locator('[data-tab="many-29"]').getAttribute('aria-selected'),'true','reordering preserves the active tab');
+    assert.equal(await page.locator('[data-tab="many-29"] .tab-favicon').count(),1,'reordering preserves the tab contents');
+    await page.locator('[data-tab="many-28"]').hover();
+    assert.equal(await page.locator('[data-tab-id="many-28"] .tab-close').isVisible(),true,'hovered compact tabs expose their close button');
+    const closeIcon=await page.locator('[data-tab-id="many-28"] .tab-close svg').boundingBox();
+    await page.mouse.click(closeIcon.x+closeIcon.width/2,closeIcon.y+closeIcon.height/2);
+    assert.equal(await page.locator('.tab').count(),29,'hover close removes an inactive tab without selecting it');
+    assert.equal(await page.locator('[data-tab="many-29"]').getAttribute('aria-selected'),'true','closing an inactive tab keeps the active tab');
     await page.locator('[data-tab="many-15"]').click({button:'middle'});
-    assert.equal(await page.locator('.tab').count(),29,'middle-click closes icon-only tabs');
+    assert.equal(await page.locator('.tab').count(),28,'middle-click closes icon-only tabs');
     await page.keyboard.press('Control+w');
-    assert.equal(await page.locator('.tab').count(),28,'Ctrl+W closes the selected icon-only tab');
+    assert.equal(await page.locator('.tab').count(),27,'Ctrl+W closes the selected icon-only tab');
     await page.locator('[data-tab="many-0"]').focus();
     await page.keyboard.press('ArrowRight');
     assert.equal(await page.locator('[data-tab="many-1"]').getAttribute('aria-selected'),'true');
@@ -136,6 +159,6 @@ const assert = require('node:assert/strict');
     assert.ok(wrapped.every(r=>r.x>=0&&r.right<=1000),'overflow rows remain inside the window');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.deepEqual(errors,[]);
-    console.log(JSON.stringify({passed:true,checks:['new-tab immediate typing','pending draft survives native refocus','Ctrl+T draft retention','native shortcut focus handoff','early Enter targets the new tab','30 tabs at 1000px','favicon click targets and titles','middle-click and Ctrl+W close','arrow-key tab navigation','stable icon through reload','failed replacement fallback','cross-origin icon reset including port changes','settings/modal focus retention','70-tab wrap fallback','no renderer exceptions']}));
+    console.log(JSON.stringify({passed:true,checks:['new-tab immediate typing','pending draft survives native refocus','Ctrl+T draft retention','native shortcut focus handoff','early Enter targets the new tab','30 tabs at 1000px','compact selected and hovered close buttons','drag tab reorder with active/icon retention','middle-click and Ctrl+W close','arrow-key tab navigation','stable icon through reload','failed replacement fallback','cross-origin icon reset including port changes','settings/modal focus retention','70-tab wrap fallback','no renderer exceptions']}));
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

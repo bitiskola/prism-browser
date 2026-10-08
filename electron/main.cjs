@@ -244,15 +244,33 @@ async function closeTab(id) {
   const tab = tabs.get(id);
   if (!tab) return;
   await focus.detach(id);
+  if (tabs.get(id) !== tab) return;
   monitor.detach(id);
   adblock?.detach(tab.view.webContents.id);
   favicons?.detach(id);
   win.contentView.removeChildView(tab.view);
   tab.view.webContents.close();
+  const orderedIds = [...tabs.keys()], index = orderedIds.indexOf(id);
   tabs.delete(id);
-  if (activeTabId === id) activeTabId = [...tabs.keys()].at(-1);
+  if (activeTabId === id) activeTabId = orderedIds[index + 1] || orderedIds[index - 1];
   if (!tabs.size && !closing) await createTab();
   layout(); sendState(); scheduleSave();
+}
+function reorderTab(id, beforeId) {
+  if (typeof id !== 'string' || !id || (beforeId !== null && (typeof beforeId !== 'string' || !beforeId))) {
+    throw new Error('Invalid tab order.');
+  }
+  // A tab can close while a drag is in progress. Validate both ends before
+  // changing the Map so stale drops cannot remove or accidentally move a tab.
+  if (!tabs.has(id) || (beforeId !== null && !tabs.has(beforeId)) || id === beforeId) return;
+  const entries = [...tabs.entries()], previousIndex = entries.findIndex(([key]) => key === id);
+  const [entry] = entries.splice(previousIndex, 1);
+  const nextIndex = beforeId === null ? entries.length : entries.findIndex(([key]) => key === beforeId);
+  if (previousIndex === nextIndex) return;
+  entries.splice(nextIndex, 0, entry);
+  tabs.clear();
+  for (const [key, tab] of entries) tabs.set(key, tab);
+  scheduleSave();
 }
 async function getFaviconDecoderContents() {
   if (faviconDecoderShutdown || !win || win.isDestroyed()) throw new Error('Favicon decoder unavailable.');
@@ -424,6 +442,7 @@ async function action(name, payload = {}) {
     case 'tab-new': await createTab(payload.url); break;
     case 'tab-close': await closeTab(payload.id); break;
     case 'tab-activate': if (tabs.has(payload.id)) { activeTabId = payload.id; layout(); scheduleSave(); } break;
+    case 'tab-reorder': reorderTab(payload.id, payload.beforeId); break;
     case 'navigate': { const url = navigationURL(payload.url, data.search); if (url !== 'about:blank' && connectionError) throw new Error(connectionError); void navigate(tab, url); break; }
     case 'back': if (wc?.navigationHistory.canGoBack()) wc.navigationHistory.goBack(); break;
     case 'forward': if (wc?.navigationHistory.canGoForward()) wc.navigationHistory.goForward(); break;

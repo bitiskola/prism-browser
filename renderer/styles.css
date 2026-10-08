@@ -31,7 +31,7 @@ button svg{flex-shrink:0}
 .tab.has-favicon .tab-fallback{visibility:hidden}
 .tab.loading:not(.has-favicon) .tab-fallback svg{animation:spin 1s linear infinite}
 .tab.loading.has-favicon .tab-symbol:after{content:"";position:absolute;right:-2px;bottom:-2px;width:4px;height:4px;background:var(--mint);border-radius:50%;box-shadow:0 0 0 1px #202127}
-.tab-close{width:22px;height:22px;display:grid;place-items:center;border-radius:4px}
+.tab-close{width:22px;height:22px;display:grid;place-items:center;border-radius:4px;flex:0 0 22px;z-index:2}
 .tab-close svg{width:12px;height:12px}
 .tab-close:hover{background:#36333f}
 .compact-tabs{gap:2px}
@@ -39,11 +39,20 @@ button svg{flex-shrink:0}
 .titlebar:has(.icon-tabs){gap:6px;padding-left:14px}
 .compact-tabs .tab{padding:0 5px;gap:0}
 .compact-tabs .tab-close{display:none}
+.compact-tabs .tab:hover .tab-close,.compact-tabs .tab.active .tab-close,.compact-tabs .tab:focus-within .tab-close{display:grid}
 .icon-tabs{gap:0}
 .icon-tabs .tab{padding:0 2px}
 .icon-tabs .tab-label{justify-content:center;gap:0}
 .icon-tabs .tab-title{display:none}
 .icon-tabs .tab.active:after{left:4px;right:4px}
+.icon-tabs .tab-close{display:none;position:absolute;right:0;top:50%;transform:translateY(-50%);width:20px;height:20px;border-radius:5px;background:#2d2e36;pointer-events:none}
+.icon-tabs .tab-close svg{position:absolute;right:1px;width:8px;height:8px;pointer-events:auto}
+.icon-tabs .tab:hover .tab-close,.icon-tabs .tab.active .tab-close,.icon-tabs .tab:focus-within .tab-close{display:grid}
+.tab.dragging{opacity:.45}
+.tab.drop-before:before,.tab.drop-after:after{content:"";position:absolute;top:4px;bottom:4px;width:2px;background:var(--purple);border-radius:2px;z-index:5;pointer-events:none}
+.tab.drop-before:before{left:-2px}
+.tab.drop-after:after{right:-2px}
+.tabs.drop-end:after{content:"";height:29px;width:2px;background:var(--purple);border-radius:2px;align-self:center;flex:0 0 2px}
 .tabs.wrapped-tabs{flex-wrap:wrap;height:auto;align-self:flex-end;padding-top:9px}
 .tabs.wrapped-tabs .tab{flex:1 0 22px;max-width:24px;height:29px}
 .titlebar.wrapped-tabs{height:auto;min-height:48px}
