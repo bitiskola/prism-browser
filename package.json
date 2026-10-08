@@ -1,7 +1,7 @@
 {
   "name": "prism-browser",
   "productName": "Prism Browser",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "desktopName": "prism-browser.desktop",
   "description": "A personal sandbox browser with search, proxy, Adblock Plus filtering and scoped page tools",
   "main": "electron/main.cjs",
@@ -20,6 +20,7 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:deb": "electron-builder --linux deb",
+    "build:deb": "bash ./build-deb.sh",
     "test:upgrade": "node scripts/upgrade-integration.cjs",
     "test:spoof": "node scripts/spoof-integration.cjs",
     "test:activation": "node scripts/focus-activation-integration.cjs",

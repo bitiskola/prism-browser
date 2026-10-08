@@ -1,6 +1,6 @@
 # Third-party notices
 
-Prism Browser 1.3.1 combines the original MIT-licensed Prism source (see `LICENSE`) with GPL-3.0-only Adblock Plus core. This combined distribution is provided under GNU GPL version 3; see `COPYING`. The source archive contains the application, vendored filtering source, filter data, and the scripts needed to build it. Distribute this source alongside packaged builds.
+Prism Browser 1.3.2 combines the original MIT-licensed Prism source (see `LICENSE`) with GPL-3.0-only Adblock Plus core. This combined distribution is provided under GNU GPL version 3; see `COPYING`. The source archive contains the application, vendored filtering source, filter data, and the scripts needed to build it. Distribute this source alongside packaged builds.
 
 ## Adblock Plus core
 

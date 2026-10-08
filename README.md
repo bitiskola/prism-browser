@@ -34,10 +34,21 @@ npm run test:desktop     # Native Ctrl+T focus handoff and custom window icon
 npm run pack             # Unpacked desktop app for this operating system
 npm run dist             # Installer/AppImage for this operating system
 npm run dist:deb         # Debian package (requires libfuse2 at runtime)
+npm run build:deb        # Install locked dependencies and build a Debian package
 npm run preview          # Interactive UI preview at http://127.0.0.1:4317
 ```
 
 The web preview is clearly labeled and cannot browse or capture real websites. Use the Electron app for those features. Packaging is configured for NSIS on Windows, DMG on macOS, and AppImage on Linux. Installer signing, automatic updates, and extension installation are not included.
+
+## Build a Debian installer
+
+On Linux with Node.js 22.12 or newer and npm installed, run:
+
+```sh
+./build-deb.sh
+```
+
+The script works from any working directory, installs dependencies using `npm ci`, and builds the package for the host architecture. Internet access is needed for uncached dependencies and packaging tools. The installer is saved in `dist/` (on x64: `prism-browser_1.3.2_amd64.deb`), includes the Prism icon, and declares `libfuse2` as a runtime dependency. It does not install or publish the package. You can also run `npm run build:deb` from this folder.
 
 ## Browse
 
@@ -151,8 +162,8 @@ Primary API references: [WebContentsView](https://www.electronjs.org/docs/latest
 
 Validation details are recorded in `VALIDATION.md`. Unit tests, real Electron browser checks and UI checks use isolated profiles and local fixture services. Proxy tests never forward requests upstream. Sandbox mode remains enabled. Linux AppImage and Debian packaging are supported; the Debian package declares `libfuse2` as a runtime dependency. Windows/macOS packaging is configured but has not been run here.
 
-The Linux launcher and native window use the custom Prism icon, with a matching `prism-browser.desktop` identity. Install or upgrade the Debian build with `sudo apt install ./prism-browser_1.3.1_amd64.deb`, then fully quit and reopen Prism. The package declares Electron's desktop runtime libraries as well as `libfuse2`. The editable icon is `build/icon.svg`; PNG assets are included, and `npm run icons` regenerates them when ImageMagick is installed.
+The Linux launcher and native window use the custom Prism icon, with a matching `prism-browser.desktop` identity. Install or upgrade the Debian build with `sudo apt install ./dist/prism-browser_1.3.2_amd64.deb`, then fully quit and reopen Prism. The package declares Electron's desktop runtime libraries as well as `libfuse2`. The editable icon is `build/icon.svg`; PNG assets are included, and `npm run icons` regenerates them when ImageMagick is installed.
 
 ## License
 
-The original Prism source remains MIT-licensed (`LICENSE`). The assembled 1.3.1 app includes GPL-3.0-only Adblock Plus core and is distributed under GPL version 3 (`COPYING`); provide the matching source archive with packaged builds. See `THIRD_PARTY_NOTICES.md` for upstream attribution and exact versions.
+The original Prism source remains MIT-licensed (`LICENSE`). The assembled 1.3.2 app includes GPL-3.0-only Adblock Plus core and is distributed under GPL version 3 (`COPYING`); provide the matching source archive with packaged builds. See `THIRD_PARTY_NOTICES.md` for upstream attribution and exact versions.
