@@ -48,7 +48,7 @@ On Linux with Node.js 22.12 or newer and npm installed, run:
 ./build-deb.sh
 ```
 
-The script works from any working directory, installs dependencies using `npm ci`, and builds the package for the host architecture. Internet access is needed for uncached dependencies and packaging tools. The installer is saved in `dist/` (on x64: `prism-browser_1.3.2_amd64.deb`), includes the Prism icon, and declares `libfuse2` as a runtime dependency. It does not install or publish the package. You can also run `npm run build:deb` from this folder.
+The script works from any working directory, installs dependencies using `npm ci`, explicitly downloads/extracts the matching Electron runtime, and builds the package for the host architecture. Internet access is needed for uncached dependencies and packaging tools. The installer is saved in `dist/` (on x64: `prism-browser_1.3.2_amd64.deb`), includes the Prism icon, and declares `libfuse2` as a runtime dependency. It does not install or publish the package. You can also run `npm run build:deb` from this folder.
 
 ## Browse
 

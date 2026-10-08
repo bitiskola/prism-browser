@@ -24,9 +24,14 @@ if (major < 22 || (major === 22 && minor < 12)) {
 }
 NODE
 
-# Install the locked development tools and their matching Electron runtime.
+# Install the locked development tools.
 unset ELECTRON_RUN_AS_NODE ELECTRON_SKIP_BINARY_DOWNLOAD ELECTRON_OVERRIDE_DIST_PATH
 npm ci --include=dev --ignore-scripts=false
+
+# Electron 44 downloads its runtime on first use, not during npm ci.
+# Packaging with electronDist needs that runtime to exist beforehand.
+echo "Preparing Electron runtime..."
+node node_modules/electron/install.js
 
 # Reuse that runtime instead of downloading Electron again during packaging.
 # package.json supplies the Prism icons and the libfuse2 runtime dependency.
