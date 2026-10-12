@@ -56,6 +56,13 @@ const assert = require('node:assert/strict');
       };
     });
     await page.goto('https://prism-ui.local/');
+    const toolbarLabels = page.locator('.privacy-tools .toolbar-label');
+    assert.deepEqual(await toolbarLabels.allTextContents(),['Spoof mode','Proxy','Ad blocker']);
+    assert.equal(await toolbarLabels.evaluateAll(nodes=>nodes.every(node=>{
+      const rect=node.getBoundingClientRect();
+      return getComputedStyle(node).display!=='none'&&rect.width>0&&rect.right<=innerWidth;
+    })),true,'privacy tool labels remain visible at the minimum window width');
+    assert.equal(await page.locator('.toolbar').evaluate(node=>node.scrollWidth<=node.clientWidth+1),true,'labeled toolbar fits at the minimum window width');
     await page.waitForFunction(()=>document.activeElement?.id==='home-address');
     await page.locator('#new-tab').click();
     await page.keyboard.type('fast typing');
@@ -159,6 +166,6 @@ const assert = require('node:assert/strict');
     assert.ok(wrapped.every(r=>r.x>=0&&r.right<=1000),'overflow rows remain inside the window');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.deepEqual(errors,[]);
-    console.log(JSON.stringify({passed:true,checks:['new-tab immediate typing','pending draft survives native refocus','Ctrl+T draft retention','native shortcut focus handoff','early Enter targets the new tab','30 tabs at 1000px','compact selected and hovered close buttons','drag tab reorder with active/icon retention','middle-click and Ctrl+W close','arrow-key tab navigation','stable icon through reload','failed replacement fallback','cross-origin icon reset including port changes','settings/modal focus retention','70-tab wrap fallback','no renderer exceptions']}));
+    console.log(JSON.stringify({passed:true,checks:['toolbar labels at 1000px','new-tab immediate typing','pending draft survives native refocus','Ctrl+T draft retention','native shortcut focus handoff','early Enter targets the new tab','30 tabs at 1000px','compact selected and hovered close buttons','drag tab reorder with active/icon retention','middle-click and Ctrl+W close','arrow-key tab navigation','stable icon through reload','failed replacement fallback','cross-origin icon reset including port changes','settings/modal focus retention','70-tab wrap fallback','no renderer exceptions']}));
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

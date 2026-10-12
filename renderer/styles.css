@@ -545,7 +545,7 @@ h1{margin-top:16px;margin-bottom:12px;font-size:40px}
 .settings-form input:disabled{opacity:.4;cursor:not-allowed}
 .add-site-button{margin-bottom:12px;font-size:12px}
 .settings-scroll .preview-notice{margin-top:18px;font-size:11px}
-@media(max-width:1320px){.privacy-tools .toolbar-label{display:none}.toolbar{gap:11px}.privacy-tools{gap:4px}.privacy-tools .toolbar-button{padding:0 7px}}
+@media(max-width:1320px){.toolbar{gap:11px}.privacy-tools{gap:4px}.privacy-tools .toolbar-button{padding:0 7px}}
 @media(max-width:900px){.toolbar{gap:7px;padding-left:8px;padding-right:9px}.navigation{gap:1px}.privacy-tools{gap:1px}.privacy-tools .toolbar-button{padding:0 6px}.toolbar-divider{margin:0}.settings-nav{gap:4px;padding-left:16px;padding-right:16px}.settings-nav button{padding:7px 8px;font-size:11px}}
 
 /* Spoof controls distinguish a saved rule from controls applied to this page. */
