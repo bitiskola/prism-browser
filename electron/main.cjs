@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, WebContentsView, session, ipcMain, dialog, Menu, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, WebContentsView, session, ipcMain, dialog, Menu, shell, nativeImage, clipboard } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -10,9 +10,10 @@ const { FaviconController, createImageDecoder } = require('./favicon.cjs');
 const { makeCookieExport, parseCookieExportText, cookieSetDetails, cookieDomainInScope, MAX_FILE_BYTES } = require('./cookies.cjs');
 const { NetworkMonitor } = require('./network.cjs');
 const { FocusController } = require('./focus.cjs');
-const { DEFAULT_PREFERENCES, SEARCH_ENGINES, normalizeSearch, normalizeProxy, publicProxyConfig } = require('./preferences.cjs');
+const { DEFAULT_PREFERENCES, SEARCH_ENGINES, normalizeSearch, normalizeProxy, publicProxyConfig, normalizeTyping } = require('./preferences.cjs');
 const { ProxyController } = require('./proxy.cjs');
 const { AdblockController, normalizeAdblockSettings } = require('./adblock.cjs');
+const { ClipboardTyping } = require('./clipboard-typing.cjs');
 
 app.setName('Prism Browser');
 if (process.platform === 'linux') app.setDesktopName('prism-browser.desktop');
@@ -26,13 +27,18 @@ let win, browserSession, proxy, adblock, favicons, connectionError = '', activeT
 let saveTimer, stateTimer, closing = false, flushed = false, proxyChangesInFlight = 0;
 let faviconDecoderView, faviconDecoderReady, faviconDecoderShutdown = false;
 let data = { rules: [], bookmarks: [], history: [], tabs: [], activeIndex: 0,
-  search: { ...DEFAULT_PREFERENCES.search }, proxy: publicProxyConfig(DEFAULT_PREFERENCES.proxy),
+  search: { ...DEFAULT_PREFERENCES.search }, typing: { ...DEFAULT_PREFERENCES.typing }, proxy: publicProxyConfig(DEFAULT_PREFERENCES.proxy),
   adblock: { enabled: true, allowlist: [], blocklist: [] } };
 const tabs = new Map();
 const downloads = new Map();
 const grants = new Set();
 const emit = (event, value) => { if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(`prism:${event}`, value); };
 const toast = message => emit('toast', { message });
+const clipboardTyping = new ClipboardTyping({
+  readText: () => clipboard.readText(), notify: toast, getSpeed: () => data.typing.speed,
+  canType: wc => Boolean(win && !win.isDestroyed() && win.isFocused() && !wc.isDestroyed() && wc.isFocused()
+    && (wc === win.webContents || (active()?.view.webContents === wc && viewport.visible)))
+});
 const monitor = new NetworkMonitor({ getRules: () => data.rules, emit: (event, value) => { emit(event, value); scheduleState(); } });
 const focus = new FocusController({ getRules: () => data.rules,
   onError: (error, id) => { const tab = tabs.get(id); if (tab) { tab.focusError = error.message; scheduleState(); } },
@@ -49,6 +55,7 @@ function readState() {
     data.tabs = (saved.tabs || []).filter(x => x === 'about:blank' || isWebURL(x)).slice(0, 30);
     data.activeIndex = Math.max(0, Number(saved.activeIndex) || 0);
     try { data.search = normalizeSearch(saved.search); } catch { /* Keep defaults for invalid legacy preferences. */ }
+    try { data.typing = normalizeTyping(saved.typing); } catch { /* Keep normal speed for invalid saved preferences. */ }
     try { data.proxy = publicProxyConfig(normalizeProxy({ ...saved.proxy, username: '', password: '' })); } catch { /* Keep direct defaults for malformed settings. */ }
     try { data.adblock = normalizeAdblockSettings(saved.adblock || data.adblock); } catch { /* Keep default filter settings. */ }
   } catch (error) { if (error.code !== 'ENOENT') console.warn('Could not restore browser state:', error.message); }
@@ -80,7 +87,7 @@ function snapshot() {
   return { tabs: [...tabs.values()].map(tabState), activeTabId, bookmarks: data.bookmarks, history: data.history,
     rules: data.rules, downloads: [...downloads.values()].map(({ item, ...entry }) => entry), profilePath: profile,
     networkPaused: monitor.paused, networkCount: monitor.entries.size,
-    search: data.search, searchEngines: SEARCH_ENGINES,
+    search: data.search, searchEngines: SEARCH_ENGINES, typing: data.typing,
     proxy: { ...data.proxy, ...proxy?.snapshot(), applying: proxyChangesInFlight > 0, hasCredentials: Boolean(proxy?.getConfig().username || proxy?.getConfig().password), ...(connectionError ? { error: connectionError } : {}) },
     adblock: adblock?.getState() || { ...data.adblock, ready: false, blockedCount: 0 } };
 }
@@ -144,6 +151,7 @@ async function refreshPageTools(tab) {
 }
 async function createTab(url = 'about:blank', activate = true) {
   if (tabs.size >= 30) throw new Error('Close a tab before opening another (30-tab limit).');
+  if (activate) clipboardTyping.stop();
   const target = navigationURL(url, data.search);
   if (target !== 'about:blank' && connectionError) throw new Error(connectionError);
   if (target === 'about:blank' && activate) {
@@ -160,6 +168,7 @@ async function createTab(url = 'about:blank', activate = true) {
     backgroundThrottling: true
   } });
   const wc = view.webContents;
+  clipboardTyping.attach(wc);
   const tab = { id, view, url: 'about:blank', title: 'New tab', loading: false, error: '', favicon: '' };
   tabs.set(id, tab);
   adblock?.attach(wc);
@@ -243,6 +252,7 @@ async function navigate(tab, value) {
 async function closeTab(id) {
   const tab = tabs.get(id);
   if (!tab) return;
+  if (clipboardTyping.run?.wc === tab.view.webContents) clipboardTyping.stop();
   await focus.detach(id);
   if (tabs.get(id) !== tab) return;
   monitor.detach(id);
@@ -414,6 +424,7 @@ async function action(name, payload = {}) {
   switch (name) {
     case 'get-state': return snapshot();
     case 'search-save': data.search = normalizeSearch(payload.search); saveState(); break;
+    case 'typing-save': data.typing = normalizeTyping(payload.typing); saveState(); break;
     case 'proxy-save': {
       proxyChangesInFlight++;
       favicons?.cancelAll();
@@ -441,7 +452,7 @@ async function action(name, payload = {}) {
     case 'adblock-save': await adblock.apply(payload.adblock); data.adblock = normalizeAdblockSettings(payload.adblock); saveState(); break;
     case 'tab-new': await createTab(payload.url); break;
     case 'tab-close': await closeTab(payload.id); break;
-    case 'tab-activate': if (tabs.has(payload.id)) { activeTabId = payload.id; layout(); scheduleSave(); } break;
+    case 'tab-activate': if (tabs.has(payload.id)) { clipboardTyping.stop(); activeTabId = payload.id; layout(); scheduleSave(); } break;
     case 'tab-reorder': reorderTab(payload.id, payload.beforeId); break;
     case 'navigate': { const url = navigationURL(payload.url, data.search); if (url !== 'about:blank' && connectionError) throw new Error(connectionError); void navigate(tab, url); break; }
     case 'back': if (wc?.navigationHistory.canGoBack()) wc.navigationHistory.goBack(); break;
@@ -530,6 +541,9 @@ async function createWindow() {
   win = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 680, backgroundColor: '#111318', frame: false, title: 'Prism Browser', icon: path.join(__dirname, '../build/icon.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, webviewTag: false } });
   win.webContents.on('will-navigate', event => event.preventDefault());
+  clipboardTyping.attach(win.webContents);
+  win.on('blur', () => clipboardTyping.stop());
+  win.on('close', () => clipboardTyping.stop());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.on('resize', layout);
   win.on('close', () => { saveState(); closing = true; clearTimeout(saveTimer); });

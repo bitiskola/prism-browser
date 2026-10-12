@@ -21,6 +21,7 @@ const SEARCH_TEMPLATES = Object.freeze({
 });
 
 const DEFAULT_PREFERENCES = Object.freeze({
+  typing: Object.freeze({ speed: 1 }),
   search: Object.freeze({ engine: 'duckduckgo', customTemplate: '' }),
   proxy: Object.freeze({
     enabled: false, type: 'http', host: '', port: 8080,
@@ -31,6 +32,15 @@ const DEFAULT_PREFERENCES = Object.freeze({
 function objectInput(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid ${label} settings.`);
   return value;
+}
+
+function normalizeTyping(input = DEFAULT_PREFERENCES.typing) {
+  objectInput(input, 'typing');
+  const speed = input.speed ?? 1;
+  if (typeof speed !== 'number' || !Number.isFinite(speed) || speed < 0.25 || speed > 3) {
+    throw new Error('Choose a typing speed between 0.25× and 3×.');
+  }
+  return { speed };
 }
 
 function normalizeTemplate(value, required) {
@@ -158,6 +168,6 @@ function publicProxyConfig(config) {
 }
 
 module.exports = {
-  SEARCH_ENGINES, DEFAULT_PREFERENCES, normalizeSearch, searchURL,
+  SEARCH_ENGINES, DEFAULT_PREFERENCES, normalizeSearch, searchURL, normalizeTyping,
   normalizeProxy, publicProxyConfig, normalizeProxyHost,
 };

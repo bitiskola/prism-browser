@@ -65,6 +65,7 @@ The script installs the locked dependencies, prepares the matching Windows Elect
 ## Browse
 
 - Address/search bar, tabs, back/forward, reload/stop, page zoom and find.
+- Press **Ctrl+9** (**Command+9** on macOS) to type clipboard text into the focused field with varied character timing and natural pauses. Press the shortcut again or Escape to stop; manual typing, clicking, switching tabs, navigation, or leaving the window also cancels it. Works in page editors and Prism's own fields, preserves Unicode, and inserts line breaks without submitting forms. Adjust **Settings → Typing → Speed** from 0.25× to 3×; the speed saves automatically and keeps the timing random.
 - Persistent cookies, local storage, IndexedDB, service-worker storage and cache in a separate profile.
 - Bookmarks, history, saved site rules, and restored tab URLs.
 - Downloads with progress, cancellation and “show in folder”.

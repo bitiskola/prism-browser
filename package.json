@@ -30,6 +30,7 @@
     "test:favicons": "node scripts/favicon-integration.cjs",
     "test:ui": "node scripts/ui-regression.cjs",
     "test:desktop": "node scripts/desktop-integration.cjs",
+    "test:typing": "node scripts/clipboard-typing-integration.cjs",
     "icons": "sh scripts/build-icons.sh"
   },
   "devDependencies": {

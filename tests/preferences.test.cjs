@@ -1,4 +1,5 @@
 'use strict';
+const { normalizeTyping } = require('../electron/preferences.cjs');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -113,4 +114,12 @@ test('SOCKS5 authentication and malformed credential inputs are rejected explici
   for (const input of [{ username: 'name:part' }, { password: 'bad\nvalue' }, { username: 1 }, { password: 'x'.repeat(1025) }]) {
     assert.throws(() => normalizeProxy(input));
   }
+});
+
+test('typing speed defaults safely and rejects invalid saved or IPC values', () => {
+  assert.deepEqual(normalizeTyping(), {speed:1});
+  assert.deepEqual(normalizeTyping({}), {speed:1});
+  for (const speed of [0.25, 1, 2, 3]) assert.deepEqual(normalizeTyping({speed}), {speed});
+  for (const speed of [0, -1, 3.25, NaN, Infinity, '2', true]) assert.throws(() => normalizeTyping({speed}));
+  for (const input of [null, [], 'fast']) assert.throws(() => normalizeTyping(input));
 });

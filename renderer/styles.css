@@ -557,3 +557,9 @@ h1{margin-top:16px;margin-bottom:12px;font-size:40px}
 #site-status.status-pending{color:#dcb674}
 .statusbar .focus-retry{color:#c9b2f2;white-space:nowrap;text-decoration:underline}
 @media(max-width:900px){.statusbar-center{display:none}}
+
+.typing-speed-label{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.typing-speed-label output{font-size:12px;color:#c4aedc;font-variant-numeric:tabular-nums}
+.typing-speed-slider{width:100%;height:32px;margin:0;accent-color:var(--purple);cursor:pointer}
+.typing-speed-slider:focus-visible{outline:2px solid var(--purple);outline-offset:3px;border-radius:4px}
+.typing-speed-scale{display:flex;justify-content:space-between;gap:12px;font-size:11px;color:#b1a6bd;margin:4px 0 12px}
