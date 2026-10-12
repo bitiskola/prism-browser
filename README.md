@@ -34,7 +34,9 @@ npm run test:desktop     # Native Ctrl+T focus handoff and custom window icon
 npm run pack             # Unpacked desktop app for this operating system
 npm run dist             # Installer/AppImage for this operating system
 npm run dist:deb         # Debian package (requires libfuse2 at runtime)
+npm run dist:win         # Windows NSIS installer
 npm run build:deb        # Install locked dependencies and build a Debian package
+npm run build:win        # Install locked dependencies and build a Windows installer
 npm run preview          # Interactive UI preview at http://127.0.0.1:4317
 ```
 
@@ -45,10 +47,20 @@ The web preview is clearly labeled and cannot browse or capture real websites. U
 On Linux with Node.js 22.12 or newer and npm installed, run:
 
 ```sh
-./build-deb.sh
+./build_deb.sh
 ```
 
-The script works from any working directory, installs dependencies using `npm ci`, explicitly downloads/extracts the matching Electron runtime, and builds the package for the host architecture. Internet access is needed for uncached dependencies and packaging tools. The installer is saved in `dist/` (on x64: `prism-browser_1.3.2_amd64.deb`), includes the Prism icon, and declares `libfuse2` as a runtime dependency. It does not install or publish the package. You can also run `npm run build:deb` from this folder.
+The script works from any working directory, installs dependencies using `npm ci`, explicitly downloads/extracts the matching Electron runtime, and builds the package for the host architecture. Internet access is needed for uncached dependencies and packaging tools. The installer is saved in `dist/` (on x64: `prism-browser_1.3.2_amd64.deb`), includes the Prism icon, and declares `libfuse2` as a runtime dependency. It does not install or publish the package. The older `build-deb.sh` name remains available. You can also run `npm run build:deb` from this folder.
+
+## Build a Windows installer
+
+On Windows with Node.js 22.12 or newer and npm installed, open Command Prompt or PowerShell in this folder and run:
+
+```bat
+build_win.bat
+```
+
+The script installs the locked dependencies, prepares the matching Windows Electron runtime, and builds an unsigned NSIS installer with the Prism icon. The installer is saved in `dist\`. Internet access is needed for uncached dependencies and NSIS packaging tools. You can also run `npm run build:win` from this folder.
 
 ## Browse
 

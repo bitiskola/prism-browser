@@ -20,7 +20,9 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:deb": "electron-builder --linux deb",
-    "build:deb": "bash ./build-deb.sh",
+    "dist:win": "electron-builder --win nsis",
+    "build:deb": "bash ./build_deb.sh",
+    "build:win": "build_win.bat",
     "test:upgrade": "node scripts/upgrade-integration.cjs",
     "test:spoof": "node scripts/spoof-integration.cjs",
     "test:activation": "node scripts/focus-activation-integration.cjs",
@@ -75,6 +77,7 @@
       ]
     },
     "win": {
+      "icon": "build/icon.png",
       "target": [
         "nsis"
       ]
