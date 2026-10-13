@@ -1,5 +1,17 @@
 # Validation record
 
+## Cross-origin focus fix — 2026-10-13 (1.3.2)
+
+- `npm test`: 126 passed, including inherited frame scope, child debugger-session setup/removal, native emulation, retry, navigation races, and restoration.
+- `npm run test:frame-focus`: passed with separate renderer processes for a local parent and its cross-origin result frame. The original implementation fails after reporting the toolbar active because the result frame remains unpatched. The fixed implementation hides real blur/focus transitions after live activation, reload, and dynamic/nested frame creation, keeps an unrelated top-level tab native, and restores native events on disable.
+- `npm run test:activation`: all 7 groups passed; `npm run test:integration`: all 11 checks passed; `npm run test:spoof-ui`: all 13 checks passed.
+- The actual `https://codepen.io/calebnance/full/nXPaKN` result at `cdpn.io`, using jQuery 2.1.3, logged native focus changes with the mode disabled and kept its own notification log unchanged across native tab/window switches after live activation. A Cloudflare challenge prevented the public-page reload check; reload coverage comes from the local fixture.
+- `npm run test:spoof`: all behavior checks passed, but the command exited with a clipboard cleanup error: original content was written back, then verification reported that not all exposed system/selection clipboard formats round-tripped unchanged. This run is not counted as a fully passing suite.
+
+New iframe targets are attached without pausing website execution. Their initial scripts can run before document overrides are installed; the frame regression verifies focus behavior after activation completes rather than claiming guaranteed interception of those initial scripts. The Linux frame test uses X11 for deterministic programmatic window activation. Integration runs used disposable profiles and `CHROME_DEVEL_SANDBOX=/opt/google/chrome/chrome-sandbox`.
+
+## Earlier release validation
+
 This record describes Prism Browser 1.3.1 on Linux with Electron 44.3.0. Regression tests use disposable profiles and local fixture servers; the activation suite was also run against the user-reported public focus-test page. Unchanged feature suites retained from 1.3.0 are marked below. The Chromium sandbox remains enabled; no `--no-sandbox` switch is supplied.
 
 ## Automated checks

@@ -26,6 +26,7 @@
     "test:upgrade": "node scripts/upgrade-integration.cjs",
     "test:spoof": "node scripts/spoof-integration.cjs",
     "test:activation": "node scripts/focus-activation-integration.cjs",
+    "test:frame-focus": "node scripts/frame-focus-integration.cjs",
     "test:spoof-ui": "node scripts/spoof-ui-regression.cjs",
     "test:favicons": "node scripts/favicon-integration.cjs",
     "test:ui": "node scripts/ui-regression.cjs",

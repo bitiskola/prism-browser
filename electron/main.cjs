@@ -41,6 +41,7 @@ const clipboardTyping = new ClipboardTyping({
 });
 const monitor = new NetworkMonitor({ getRules: () => data.rules, emit: (event, value) => { emit(event, value); scheduleState(); } });
 const focus = new FocusController({ getRules: () => data.rules,
+  getFrameSessions: id => monitor.getFrameSessions(id),
   onError: (error, id) => { const tab = tabs.get(id); if (tab) { tab.focusError = error.message; scheduleState(); } },
   onStatus: (status, id) => { const tab = tabs.get(id); if (tab) { tab.focusStatus = status; tab.focusError = status.error || ''; scheduleState(); } }
 });

@@ -1,7 +1,8 @@
 'use strict';
 
 // This is a compatibility aid, not an undetectable replacement for OS focus.
-// CDP's native emulation is page-wide; JS overrides are checked per document.
+// A selected top-level site includes its embedded documents. Rules on embedded
+// sites alone stay local to those documents; native CDP emulation is page-wide.
 // https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-addScriptToEvaluateOnNewDocument
 // https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#method-setFocusEmulationEnabled
 
@@ -35,11 +36,19 @@ function patchDocument(rules) {
 
   let enabled = false;
   try {
-    const url = new URL(document.location.href);
-    const host = url.hostname.toLowerCase().replace(/\.$/, '');
-    enabled = (url.protocol === 'http:' || url.protocol === 'https:') && rules.some(rule =>
-      host === rule.host || (rule.includeSubdomains && host.endsWith(`.${rule.host}`)));
-  } catch { /* about:blank, opaque or unavailable documents are not selected. */ }
+    const urls = [document.location.href];
+    // Chromium exposes ancestor origins even across the same-origin boundary.
+    // Only inherit the top-level site's rule, never a sibling/embedded site's
+    // rule. This also covers nested frames, about:blank and srcdoc at creation.
+    const ancestors = document.location.ancestorOrigins;
+    if (ancestors?.length) urls.push(ancestors[ancestors.length - 1]);
+    enabled = urls.some(value => {
+      const url = new URL(value);
+      const host = url.hostname.toLowerCase().replace(/\.$/, '');
+      return (url.protocol === 'http:' || url.protocol === 'https:') && rules.some(rule =>
+        host === rule.host || (rule.includeSubdomains && host.endsWith(`.${rule.host}`)));
+    });
+  } catch { /* Unavailable documents are not selected. */ }
   // Keep the original capture-listener order across dom-ready/frame refreshes.
   // Reinstalling after website scripts have run would let their listeners run first.
   if (enabled && previous?.version === 2) return true;
@@ -200,8 +209,9 @@ function buildFocusScript(rules) {
 }
 
 class FocusController {
-  constructor({ getRules, onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
+  constructor({ getRules, getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
     this.getRules = getRules;
+    this.getFrameSessions = getFrameSessions;
     this.onError = onError;
     this.onStatus = onStatus;
     this.executionTimeout = executionTimeout;
@@ -211,7 +221,8 @@ class FocusController {
   async attach(webContents, tabId) {
     if (this.tabs.has(tabId)) await this.detach(tabId);
     if (!webContents.debugger.isAttached()) throw new Error('Attach the network debugger before the focus controller.');
-    const state = { webContents, tabId, chain: Promise.resolve(), scriptId: null, signature: null, epoch: 0, closed: false, listeners: [], appliedFrames: new Map(), status: { status: 'applying', error: '', warning: '' } };
+    const state = { webContents, tabId, chain: Promise.resolve(), scriptId: null, signature: null, epoch: 0, closed: false, listeners: [], appliedFrames: new Map(), frameSessions: new Map(), status: { status: 'applying', error: '', warning: '' } };
+    for (const id of this.getFrameSessions(tabId)) state.frameSessions.set(id, { scriptId: null, signature: null });
     this.tabs.set(tabId, state);
     this.onStatus(state.status, tabId);
     const listen = (name, handler) => {
@@ -226,11 +237,27 @@ class FocusController {
     const refresh = () => { void this.refresh(tabId).catch(() => {}); };
     state.onDebuggerDetach = () => {
       state.epoch++;
+      state.frameSessions.clear();
       this.publish(state, 'unavailable', 'Page tools disconnected. Turn spoof mode on again to reconnect.');
     };
+    // The network controller owns auto-attachment. Reuse its iframe sessions
+    // without attaching workers or changing debugger ownership. OOPIFs need
+    // their own native emulation; the root session does not cover them.
+    state.onDebuggerMessage = (_event, method, params = {}) => {
+      if (method === 'Target.attachedToTarget' && params.targetInfo?.type === 'iframe') {
+        if (!state.frameSessions.has(params.sessionId)) {
+          state.frameSessions.set(params.sessionId, { scriptId: null, signature: null });
+          refresh();
+        }
+      } else if (method === 'Target.detachedFromTarget') {
+        state.frameSessions.delete(params.sessionId);
+      }
+    };
     webContents.debugger.on?.('detach', state.onDebuggerDetach);
+    webContents.debugger.on?.('message', state.onDebuggerMessage);
     // The native CDP setting spans a whole page. Suspend it while frame scope is
-    // unknown, then re-enable only if EVERY current frame has its own rule.
+    // unknown, then re-enable only if EVERY current frame is selected, either
+    // through the top-level rule or through its own site's rule.
     listen('did-start-navigation', suspend);
     listen('frame-created', suspend);
     listen('did-frame-navigate', refresh);
@@ -283,10 +310,45 @@ class FocusController {
     } catch { return []; }
   }
 
+  frameSelected(state, frame, rules) {
+    return selected(state.webContents.mainFrame.url, rules) || selected(frame.url, rules);
+  }
+
+  async updateFrameScripts(state, source, signature) {
+    const results = await Promise.allSettled([...state.frameSessions].map(async ([id, session]) => {
+      if (session.signature === signature) return;
+      const send = (method, params) => state.webContents.debugger.sendCommand(method, params, id);
+      try {
+        await send('Page.enable');
+        if (session.scriptId) {
+          await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: session.scriptId });
+          session.scriptId = null;
+        }
+        if (state.closed || state.frameSessions.get(id) !== session) return;
+        const result = await send('Page.addScriptToEvaluateOnNewDocument', { source });
+        session.scriptId = result.identifier;
+        session.signature = signature;
+      } catch (error) {
+        // Navigation can destroy an iframe while its CDP command is pending.
+        if (state.frameSessions.get(id) === session) throw error;
+      }
+    }));
+    const failed = results.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
+  }
+
   async setEmulation(state, enabled) {
     try {
       if (!state.webContents.isDestroyed() && state.webContents.debugger.isAttached()) {
-        await state.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled });
+        const results = await Promise.allSettled([
+          state.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled }),
+          ...[...state.frameSessions].map(async ([id, session]) => {
+            try { await state.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled }, id); }
+            catch (error) { if (state.frameSessions.get(id) === session) throw error; }
+          }),
+        ]);
+        const failed = results.find(result => result.status === 'rejected');
+        if (failed) throw failed.reason;
         return '';
       }
       return 'Native focus emulation is unavailable because page tools are disconnected.';
@@ -315,7 +377,7 @@ class FocusController {
           // focus from an already selected page. Navigation/frame events still
           // suspend emulation immediately while the new document scope is unknown.
           const currentFrames = this.frames(state);
-          const scopeStillSelected = currentFrames.length > 0 && currentFrames.every(frame => selected(frame.url, normalized));
+          const scopeStillSelected = currentFrames.length > 0 && currentFrames.every(frame => this.frameSelected(state, frame, normalized));
           if (!scopeStillSelected) await this.setEmulation(state, false);
           if (state.scriptId) {
             await state.webContents.debugger.sendCommand('Page.removeScriptToEvaluateOnNewDocument', { identifier: state.scriptId });
@@ -328,6 +390,8 @@ class FocusController {
           state.signature = signature;
         }
         if (state.closed) return;
+        await this.updateFrameScripts(state, source, signature);
+        if (state.closed) return;
         const frames = this.frames(state);
         // Bound every frame independently: an unresponsive background renderer
         // must not leave the toolbar waiting indefinitely for rule application.
@@ -336,7 +400,7 @@ class FocusController {
         if (!frames.length) throw new Error('The page is not ready for spoof mode. Reload it and try again.');
         for (let index = 0; index < frames.length; index++) {
           const frame = frames[index];
-          const enabled = selected(frame.url, normalized);
+          const enabled = this.frameSelected(state, frame, normalized);
           const previous = state.appliedFrames.get(frame);
           const result = results[index];
           // Failures on unrelated documents are irrelevant, but failed removal
@@ -346,19 +410,19 @@ class FocusController {
           }
         }
         const currentFrames = this.frames(state);
-        const allSelected = currentFrames.length > 0 && currentFrames.every(frame => selected(frame.url, normalized));
+        const allSelected = currentFrames.length > 0 && currentFrames.every(frame => this.frameSelected(state, frame, normalized));
         const warning = await this.setEmulation(state, allSelected);
         if (state.closed || epoch !== state.epoch) return;
         // Only documents whose own setting changed need an update notification.
         // Saving an unrelated site's rule must not add fake focus events here.
         const changedFrames = frames.filter(frame => {
-          const enabled = selected(frame.url, normalized);
+          const enabled = this.frameSelected(state, frame, normalized);
           return state.appliedFrames.get(frame) !== enabled && (enabled || state.appliedFrames.get(frame) === true);
         });
         const signal = `(() => { document.dispatchEvent(new Event('visibilitychange')); window.dispatchEvent(new Event(document.hasFocus() ? 'focus' : 'blur')); })();`;
         await Promise.allSettled(changedFrames.map(frame => this.execute(frame, signal)));
         if (state.closed || epoch !== state.epoch) return;
-        state.appliedFrames = new Map(frames.map(frame => [frame, selected(frame.url, normalized)]));
+        state.appliedFrames = new Map(frames.map(frame => [frame, this.frameSelected(state, frame, normalized)]));
         this.publish(state, selected(state.webContents.mainFrame.url, normalized) ? 'active' : 'inactive', '', allSelected ? warning : '');
       } catch (error) {
         if (state.closed || epoch !== state.epoch) return;
@@ -376,12 +440,18 @@ class FocusController {
     this.tabs.delete(tabId);
     for (const [name, handler] of state.listeners) state.webContents.removeListener(name, handler);
     state.webContents.debugger.removeListener?.('detach', state.onDebuggerDetach);
+    state.webContents.debugger.removeListener?.('message', state.onDebuggerMessage);
     await state.chain.catch(() => {});
     await this.setEmulation(state, false);
     if (state.webContents.isDestroyed()) return;
     if (state.scriptId && state.webContents.debugger.isAttached()) {
       await state.webContents.debugger.sendCommand('Page.removeScriptToEvaluateOnNewDocument', { identifier: state.scriptId }).catch(() => {});
     }
+    if (state.webContents.debugger.isAttached()) {
+      await Promise.allSettled([...state.frameSessions].filter(([, session]) => session.scriptId).map(([id, session]) =>
+        state.webContents.debugger.sendCommand('Page.removeScriptToEvaluateOnNewDocument', { identifier: session.scriptId }, id)));
+    }
+    state.frameSessions.clear();
     const source = buildFocusScript([]);
     await Promise.allSettled(this.frames(state).map(frame => this.execute(frame, source)));
   }

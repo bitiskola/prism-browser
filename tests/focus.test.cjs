@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { FocusController, buildFocusScript } = require('../electron/focus.cjs');
 
-function page(url) {
+function page(url, ancestorOrigins = []) {
   const listeners = new Map();
   let nativeFocused = false;
   const prototype = { hasFocus() { return nativeFocused; } };
@@ -15,7 +15,7 @@ function page(url) {
     visibilityState: { get: () => 'hidden', configurable: true },
   });
   const document = Object.create(prototype);
-  document.location = { href: url };
+  document.location = { href: url, ancestorOrigins };
   const window = {
     addEventListener(type, fn) { const set = listeners.get(type) || new Set(); set.add(fn); listeners.set(type, set); },
     removeEventListener(type, fn) { listeners.get(type)?.delete(fn); },
@@ -69,13 +69,29 @@ test('subdomains are optional, normalized, and constrained by dot boundaries', (
   assert.equal(fixture.apply([{ host: 'example.com', focus: false, includeSubdomains: true }]), false);
 });
 
-test('iframe documents need their own rule even under a selected parent', () => {
-  const parent = page('https://example.com');
-  const iframe = page('https://video.other.test');
+test('a selected top-level site includes cross-origin and opaque embedded documents', () => {
   const rules = [{ host: 'example.com', focus: true }];
-  assert.equal(parent.apply(rules), true);
+  for (const url of ['https://video.other.test', 'about:blank', 'about:srcdoc', 'data:text/html,frame', 'blob:https://other.test/id']) {
+    const iframe = page(url, ['https://nested.other.test', 'https://example.com']);
+    assert.equal(iframe.apply(rules), true, url);
+    assert.equal(iframe.document.hasFocus(), true, url);
+    assert.equal(iframe.dispatch('blur', iframe.window), true, url);
+    assert.equal(iframe.apply([]), false, url);
+    assert.equal(iframe.document.hasFocus(), false, url);
+    assert.equal(iframe.listeners.get('blur').size, 0, url);
+  }
+});
+
+test('frame inheritance respects top-level host boundaries and does not spread embedded-only rules', () => {
+  const rules = [{ host: 'example.com', focus: true }];
+  for (const top of ['https://other.test', 'https://example.com.evil.test', 'https://notexample.com', 'null']) {
+    assert.equal(page('https://child.test', ['https://example.com', top]).apply(rules), false, top);
+  }
+  const iframe = page('https://child.test', ['https://sub.example.com']);
   assert.equal(iframe.apply(rules), false);
-  assert.equal(iframe.apply([...rules, { host: 'video.other.test', focus: true }]), true);
+  assert.equal(iframe.apply([{ ...rules[0], includeSubdomains: true }]), true);
+  assert.equal(page('https://example.com', ['https://other.test']).apply(rules), true, 'own frame rule still works');
+  assert.equal(page('https://child.test').apply(rules), false, 'standalone embedded host remains unselected');
 });
 
 test('trusted page blur and visibility are suppressed while input and synthetic events survive', () => {
@@ -224,18 +240,19 @@ function contents(url, extraFrames = []) {
   const wc = new EventEmitter();
   const commands = [];
   let serial = 0;
-  const makeFrame = frameUrl => {
+  const makeFrame = (frameUrl, child = false) => {
     const fixture = page(frameUrl);
     return { url: frameUrl, executions: [], async executeJavaScript(source) {
       this.executions.push(source);
       fixture.document.location.href = this.url;
+      fixture.document.location.ancestorOrigins = child ? [new URL(wc.mainFrame.url).origin] : [];
       // Notifications are covered by real Electron integration tests.
       if (source.startsWith('(() => { document.dispatchEvent')) return;
       return fixture.evaluate(source);
     }, isDestroyed: () => false };
   };
   wc.mainFrame = makeFrame(url);
-  wc.mainFrame.framesInSubtree = [wc.mainFrame, ...extraFrames.map(makeFrame)];
+  wc.mainFrame.framesInSubtree = [wc.mainFrame, ...extraFrames.map(url => makeFrame(url, true))];
   wc.isDestroyed = () => false;
   wc.debugger = {
     isAttached: () => true,
@@ -270,14 +287,15 @@ test('controller installs main-world script, refreshes rules, restores and leave
   assert.equal(commands.some(command => command.method.startsWith('Target.')), false);
 });
 
-test('native emulation stays disabled with unselected frames and suspends for navigation', async () => {
+test('top-level rules cover every frame and native emulation suspends on navigation away', async () => {
   let rules = [{ host: 'example.com', focus: true }];
   const { wc, commands } = contents('https://example.com', ['https://other.test']);
   const controller = new FocusController({ getRules: () => rules });
   await controller.attach(wc, 'tab');
-  assert.equal(commands.at(-1).params.enabled, false);
-  assert.equal(wc.mainFrame.framesInSubtree[1].executions.length, 1);
-  rules = [...rules, { host: 'other.test', focus: true }];
+  assert.equal(commands.at(-1).params.enabled, true);
+  const child = wc.mainFrame.framesInSubtree[1];
+  assert.ok(child.executions.some(script => script.startsWith('(() => { document.dispatchEvent')));
+  rules = [...rules, { host: 'unrelated.test', focus: true }];
   await controller.refresh('tab');
   assert.equal(commands.at(-1).params.enabled, true);
   wc.emit('did-start-navigation');
@@ -286,6 +304,8 @@ test('native emulation stays disabled with unselected frames and suspends for na
   wc.mainFrame.url = 'https://unselected.test';
   await controller.refresh('tab');
   assert.equal(commands.at(-1).params.enabled, false);
+  assert.equal(controller.getStatus('tab').status, 'inactive');
+  assert.equal(controller.tabs.get('tab').appliedFrames.get(child), false);
   await controller.detach('tab');
 });
 
@@ -333,13 +353,39 @@ test('prototype access agrees with selected document while other receivers stay 
   assert.deepEqual(Object.getOwnPropertyDescriptors(proto), original);
 });
 
-test('unselected frames receive no synthetic focus notifications on initial setup', async () => {
-  const { wc } = contents('https://example.com', ['https://unselected.test']);
+test('embedded-only rules leave the top-level page and sibling frames unselected', async () => {
+  const { wc, commands } = contents('https://unselected.test', ['https://example.com', 'https://sibling.test']);
   const controller = new FocusController({ getRules: () => [{host:'example.com',focus:true}] });
   await controller.attach(wc, 'frame-test');
-  assert.ok(wc.mainFrame.executions.some(script => script.includes('dispatchEvent')));
-  assert.ok(wc.mainFrame.framesInSubtree[1].executions.every(script => !script.startsWith('(() => { document.dispatchEvent')));
+  assert.equal(commands.at(-1).params.enabled, false);
+  assert.equal(controller.getStatus('frame-test').status, 'inactive');
+  for (const frame of [wc.mainFrame, wc.mainFrame.framesInSubtree[2]]) {
+    assert.ok(frame.executions.every(script => !script.startsWith('(() => { document.dispatchEvent')));
+  }
+  assert.ok(wc.mainFrame.framesInSubtree[1].executions.some(script => script.startsWith('(() => { document.dispatchEvent')));
   await controller.detach('frame-test');
+});
+
+test('failed application or removal in an inherited cross-origin frame is reported', async () => {
+  let rules = [{ host: 'example.com', focus: true }];
+  const { wc } = contents('https://example.com', ['https://child.test']);
+  const child = wc.mainFrame.framesInSubtree[1];
+  const execute = child.executeJavaScript;
+  const controller = new FocusController({ getRules: () => rules });
+  child.executeJavaScript = async () => false;
+  await assert.rejects(controller.attach(wc, 'tab'), /could not be applied/);
+  assert.equal(controller.getStatus('tab').status, 'error');
+  child.executeJavaScript = execute;
+  await controller.refresh('tab');
+  assert.equal(controller.getStatus('tab').status, 'active');
+  rules = [];
+  child.executeJavaScript = async () => { throw new Error('Child unavailable'); };
+  await assert.rejects(controller.refresh('tab'), /Child unavailable/);
+  assert.equal(controller.getStatus('tab').status, 'error');
+  child.executeJavaScript = execute;
+  await controller.refresh('tab');
+  assert.equal(controller.getStatus('tab').status, 'inactive');
+  await controller.detach('tab');
 });
 
 test('controller exposes applied state and reports missing controllers instead of successful activation', async () => {

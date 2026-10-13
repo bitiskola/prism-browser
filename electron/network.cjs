@@ -55,7 +55,7 @@ class NetworkMonitor {
     const debuggerApi = webContents.debugger;
     if (!debuggerApi.isAttached()) debuggerApi.attach('1.3');
     const state = { webContents, tabId, pageUrl: webContents.getURL(), epoch: 0,
-      mainFrameId: '', loaderId: '', awaitingDocument: false, frameEpochs: new Map(), chains: new Map(), sessions: new Map() };
+      mainFrameId: '', loaderId: '', awaitingDocument: false, frameEpochs: new Map(), chains: new Map(), sessions: new Map(), frameSessions: new Set() };
     state.onMessage = (_event, method, params, sessionId) => {
       this.handleMessage(tabId, method, params, sessionId).catch(() => {});
     };
@@ -76,6 +76,7 @@ class NetworkMonitor {
       state.epoch++;
       this._clearChains(state);
       state.sessions.clear();
+      state.frameSessions.clear();
       this.emit('network-status', { tabId, attached: false, reason: clipped(reason, 256) });
     };
     this.tabs.set(tabId, state);
@@ -113,11 +114,16 @@ class NetworkMonitor {
     wc.removeListener('destroyed', state.onDestroyed);
     this._clearChains(state);
     state.sessions.clear();
+    state.frameSessions.clear();
     this.tabs.delete(tabId);
     // Do not detach the shared CDP connection: focus emulation also uses it.
   }
 
   getEntries() { return Array.from(this.entries.values(), copy); }
+  // Focus controls also use iframe targets, including targets attached while
+  // network capture is between documents. Keep connection lifetime separate
+  // from the capture epochs in sessions.
+  getFrameSessions(tabId) { return [...(this.tabs.get(tabId)?.frameSessions || [])]; }
   getEntry(id) { return this.entries.has(id) ? copy(this.entries.get(id)) : null; }
   clear() {
     this.entries.clear();
@@ -292,6 +298,7 @@ class NetworkMonitor {
     if (!state) return;
     if (method === 'Target.attachedToTarget') {
       if (!['iframe', 'worker'].includes(params.targetInfo?.type)) return;
+      if (params.targetInfo.type === 'iframe') state.frameSessions.add(params.sessionId);
       if (state.awaitingDocument) return;
       if (sessionId && state.sessions.get(sessionId)?.epoch !== state.epoch) return;
       if (state.sessions.size >= 256) return;
@@ -301,7 +308,7 @@ class NetworkMonitor {
       await dbg.sendCommand('Target.setAutoAttach', AUTO_ATTACH, params.sessionId).catch(() => {});
       return;
     }
-    if (method === 'Target.detachedFromTarget') { state.sessions.delete(params.sessionId); return; }
+    if (method === 'Target.detachedFromTarget') { state.sessions.delete(params.sessionId); state.frameSessions.delete(params.sessionId); return; }
     if (!sessionId && method === 'Page.frameAttached') {
       if (state.frameEpochs.get(params.parentFrameId) === state.epoch && state.frameEpochs.size < 1024) state.frameEpochs.set(params.frameId, state.epoch);
       return;

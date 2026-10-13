@@ -26,6 +26,7 @@ npm test                 # Policy, focus, proxy, search and filtering unit tests
 npm run test:integration # Real Electron browser regression tests
 npm run test:upgrade     # Real local proxy, auth, search and ad blocker tests
 npm run test:spoof       # Native keys, clipboard, selection and tab/window focus
+npm run test:frame-focus # Cross-origin frame focus, reload, dynamic frames and opt-out
 npm run test:activation  # Live activation, blocked tabs, failures and reconnects
 npm run test:spoof-ui    # Delayed saves, repeated clicks, status and retry UI
 npm run test:favicons    # Session cookies, reloads, SVG icons and fallbacks
@@ -136,7 +137,7 @@ References: [Adblock Plus core](https://github.com/adblockplus/adblockpluscore),
 
 ## Spoof mode: focus, selection and keyboard listeners
 
-Enable **Spoof mode** for the current website or its site rule. Selected documents report `document.hasFocus() === true`, `document.hidden === false`, and `document.visibilityState === 'visible'`. The controller installs at document creation, intercepts trusted page-level blur/visibility events, and uses Chromium's focus emulation when frame scope permits. Document properties and their normal prototype accessors agree. Live changes notify the page using synthetic focus/visibility events. Focus transitions between inputs keep working.
+Enable **Spoof mode** for the current website or its site rule. Selected documents report `document.hasFocus() === true`, `document.hidden === false`, and `document.visibilityState === 'visible'`. The controller registers document-start overrides, intercepts trusted page-level blur/visibility events, and uses Chromium's focus emulation when frame scope permits, including in separate iframe renderers. Document properties and their normal prototype accessors agree. Live changes notify the page using synthetic focus/visibility events. Focus transitions between inputs keep working.
 
 The toolbar shows **Applying…** while a change is being applied and turns green only after the page confirms the document controls. Repeated clicks are blocked during that operation. If application fails, the reason and a **Retry spoof mode** action appear in the footer. Retry reconnects disconnected page tools while preserving the saved rule. Full Developer Tools temporarily pauses spoof mode; close it to resume. A stalled background tab no longer holds up the current tab's activation, and changing unrelated rules no longer briefly drops native focus emulation.
 
@@ -147,7 +148,7 @@ When checking a focus-event test page, enable the mode, wait for the green state
 - Common Selection API readers report an empty selection; input and textarea selection offsets are masked. Chromium retains the actual selection for native copying and editing.
 - Primary mouse/pointer-down cancellation and `user-select: none` restrictions on the clicked text are relaxed so selection and input focus work. Ordinary click handlers keep running. This does not remove disabled form controls or arbitrary overlays.
 
-Disabling restores the normal document properties, listeners and changed selection styles. Rules are checked independently inside frames; a third-party frame needs its own selected hostname. Reload after enabling to install the controls before the page's initial listeners. Repeated controller refreshes preserve capture-listener ordering.
+Disabling restores the normal document properties, listeners and changed selection styles. A selected top-level website includes its embedded frames, even when they use another hostname (for example, CodePen's result frame). The embedded hostname is not enabled in unrelated tabs. On an unselected top-level website, an embedded frame can still match its own site rule without enabling its parent or sibling frames. Reload after enabling to improve initial listener coverage; frames in another renderer process can run initial scripts before page tools attach. Repeated controller refreshes preserve capture-listener ordering.
 
 Keyboard-driven websites and rich-text editors may need spoof mode turned off. Input values and `beforeinput`, `input` and `change` events remain observable so ordinary editing works; this mode cannot conceal content changes or every way a page can infer an interaction.
 
