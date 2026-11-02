@@ -121,7 +121,7 @@ test('reapplying is idempotent and current-context navigation away restores orig
   const firstListeners = [...fixture.listeners].map(([name, set]) => [name, [...set]]);
   fixture.apply(rules);
   assert.deepEqual([...fixture.listeners].map(([name, set]) => [name, [...set]]), firstListeners);
-  assert.equal([...fixture.listeners.values()].reduce((n, set) => n + set.size, 0), 25);
+  assert.equal([...fixture.listeners.values()].reduce((n, set) => n + set.size, 0), 29);
   fixture.document.location.href = 'https://other.test';
   fixture.apply(rules);
   assert.deepEqual(Object.getOwnPropertyDescriptor(fixture.document, 'hasFocus'), originalDescriptor);
@@ -536,4 +536,49 @@ test('detaching during frame injection never publishes the stale completed activ
   await Promise.all([applying, detaching]);
   assert.deepEqual(updates, before);
   assert.equal(controller.getStatus('tab').status, 'unavailable');
+});
+
+test('spoof mode overrides userAgent, appVersion, userAgentData and window.chrome as Chrome 153, and restores originals on disable', async () => {
+  const originalUA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.78 Electron/44.3.0 Safari/537.36';
+  const originalAV = '5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.78 Electron/44.3.0 Safari/537.36';
+  const listeners = new Map();
+  const document = Object.create({ hasFocus() { return false; } });
+  document.location = { href: 'https://example.com/test' };
+  const window = {
+    addEventListener(type, fn) { const set = listeners.get(type) || new Set(); set.add(fn); listeners.set(type, set); },
+    removeEventListener(type, fn) { listeners.get(type)?.delete(fn); },
+  };
+  const navigator = {
+    userAgent: originalUA,
+    appVersion: originalAV,
+    platform: 'Linux x86_64',
+    vendor: ''
+  };
+  const context = vm.createContext({ document, window, navigator, URL, DOMException });
+  const rules = [{ host: 'example.com', focus: true }];
+  
+  vm.runInContext(buildFocusScript(rules), context);
+  assert.equal(navigator.userAgent, 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36');
+  assert.equal(navigator.appVersion, '5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36');
+  assert.equal(navigator.vendor, 'Google Inc.');
+  assert.equal(navigator.userAgent.includes('Electron'), false);
+  assert.equal(navigator.appVersion.includes('Electron'), false);
+  assert.equal(navigator.userAgent.includes('153.0.0.0'), true);
+  assert.ok(navigator.userAgentData);
+  assert.deepEqual(JSON.parse(JSON.stringify(navigator.userAgentData.brands)), [
+    { brand: 'Chromium', version: '153' },
+    { brand: 'Google Chrome', version: '153' },
+    { brand: 'Not(A:Brand', version: '24' }
+  ]);
+  const highEntropy = await navigator.userAgentData.getHighEntropyValues(['platformVersion', 'uaFullVersion', 'fullVersionList']);
+  assert.equal(highEntropy.uaFullVersion, '153.0.0.0');
+  assert.ok(window.chrome?.app);
+  assert.equal(typeof window.chrome.loadTimes, 'function');
+
+  // Opt-out / disable
+  vm.runInContext(buildFocusScript([]), context);
+  assert.equal(navigator.userAgent, originalUA);
+  assert.equal(navigator.appVersion, originalAV);
+  assert.equal(navigator.userAgentData, undefined);
+  assert.equal(window.chrome, undefined);
 });

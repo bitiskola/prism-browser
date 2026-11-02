@@ -26,6 +26,17 @@ function selected(url, rules) {
   } catch { return false; }
 }
 
+function getChromeUserAgent(existingUA = '') {
+  const ua = String(existingUA || '').trim();
+  const base = ua || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+  return base
+    .replace(/Electron\/\S+\s*/g, '')
+    .replace(/PrismBrowser\/\S+\s*/g, '')
+    .replace(/Chrome\/\d+(\.\d+)*/g, 'Chrome/153.0.0.0')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 // Serialized into the page's MAIN world, before that document's own scripts.
 // Prototype wrappers only affect this selected document; other document receivers
 // still use their original getter/method. They are restored with the own properties.
@@ -57,6 +68,7 @@ function patchDocument(rules) {
 
   const descriptors = [];
   const listeners = [];
+  const docListeners = [];
   const selectionStyles = new Map();
   const originalHasFocus = document.hasFocus.bind(document);
   const define = (name, descriptor, owner = document) => {
@@ -68,6 +80,9 @@ function patchDocument(rules) {
   };
   const restore = () => {
     for (const [name, listener] of listeners) window.removeEventListener(name, listener, true);
+    for (const [name, listener] of docListeners) {
+      try { document.removeEventListener(name, listener, true); } catch {}
+    }
     for (const [element, properties] of selectionStyles) {
       for (const [property, original] of properties) {
         if (element.style.getPropertyValue(property) !== 'text' || element.style.getPropertyPriority(property) !== 'important') continue;
@@ -84,6 +99,7 @@ function patchDocument(rules) {
         else delete owner[name];
       } catch { /* A page may deliberately freeze its properties after installation. */ }
     }
+    try { delete window.__prism_report_display_surface; } catch {} 
     try { delete document[key]; } catch { /* Best effort if a page freezes the document. */ }
   };
   try { Object.defineProperty(document, key, { value: { restore, version: 2 }, configurable: true }); }
@@ -106,6 +122,370 @@ function patchDocument(rules) {
   define('visibilityState', { get: () => 'visible' });
   define('webkitHidden', { get: () => false });
   define('webkitVisibilityState', { get: () => 'visible' });
+
+  // Fullscreen spoofing in spoof mode: page always sees fullscreen, never notices exiting or re-entering
+  let activeFsElement = null;
+  const getFsElement = () => activeFsElement || (typeof document !== "undefined" ? (document.documentElement || document.body || null) : null);
+
+  for (const [name, getter] of [
+    ["fullscreenElement", getFsElement],
+    ["webkitFullscreenElement", getFsElement],
+    ["webkitCurrentFullScreenElement", getFsElement],
+    ["fullscreen", () => true],
+    ["webkitIsFullScreen", () => true],
+    ["fullscreenEnabled", () => true],
+    ["webkitFullscreenEnabled", () => true]
+  ]) {
+    let owner = (typeof document !== "undefined" && Object.getPrototypeOf(document)) || null;
+    while (owner && !Object.hasOwn(owner, name)) owner = Object.getPrototypeOf(owner);
+    if (!owner) continue;
+    if (owner) {
+      const original = Object.getOwnPropertyDescriptor(owner, name);
+      if (original?.get) {
+        define(name, { ...original, get: function () { return this === document ? getter() : Reflect.apply(original.get, this, []); } }, owner);
+      } else {
+        define(name, { get: getter, configurable: true }, owner);
+      }
+    }
+  }
+
+  define("fullscreenElement", { get: getFsElement });
+  define("webkitFullscreenElement", { get: getFsElement });
+  define("webkitCurrentFullScreenElement", { get: getFsElement });
+  define("fullscreen", { get: () => true });
+  define("webkitIsFullScreen", { get: () => true });
+  define("fullscreenEnabled", { get: () => true });
+  define("webkitFullscreenEnabled", { get: () => true });
+  define("onfullscreenchange", { get: () => null, set: () => {}, configurable: true });
+  define("onwebkitfullscreenchange", { get: () => null, set: () => {}, configurable: true });
+  if (typeof window !== "undefined") {
+    define("onfullscreenchange", { get: () => null, set: () => {}, configurable: true }, window);
+    define("onwebkitfullscreenchange", { get: () => null, set: () => {}, configurable: true }, window);
+  }
+
+  const stopFsEvent = e => {
+    if (e && typeof e.stopImmediatePropagation === "function") {
+      e.stopImmediatePropagation();
+    }
+  };
+  for (const eventName of ["fullscreenchange", "webkitfullscreenchange", "fullscreenerror", "webkitfullscreenerror"]) {
+    if (typeof window !== "undefined" && window.addEventListener) {
+      window.addEventListener(eventName, stopFsEvent, true);
+      listeners.push([eventName, stopFsEvent]);
+    }
+    if (typeof document !== "undefined" && document.addEventListener) {
+      document.addEventListener(eventName, stopFsEvent, true);
+      docListeners.push([eventName, stopFsEvent]);
+    }
+  }
+
+  if (typeof Element !== "undefined" && Element.prototype) {
+    const elProto = Element.prototype;
+    if (elProto.requestFullscreen) {
+      const origRequestFs = elProto.requestFullscreen;
+      define("requestFullscreen", {
+        value: async function requestFullscreen(...args) {
+          activeFsElement = this;
+          try {
+            return await Reflect.apply(origRequestFs, this, args);
+          } catch {
+            return Promise.resolve();
+          }
+        },
+        writable: true,
+        configurable: true
+      }, elProto);
+    }
+    if (elProto.webkitRequestFullscreen) {
+      const origWebkitRequestFs = elProto.webkitRequestFullscreen;
+      define("webkitRequestFullscreen", {
+        value: async function webkitRequestFullscreen(...args) {
+          activeFsElement = this;
+          try {
+            return await Reflect.apply(origWebkitRequestFs, this, args);
+          } catch {
+            return Promise.resolve();
+          }
+        },
+        writable: true,
+        configurable: true
+      }, elProto);
+    }
+  }
+
+  if (typeof Document !== "undefined" && Document.prototype) {
+    const docProto = Document.prototype;
+    if (docProto.exitFullscreen) {
+      const origExitFs = docProto.exitFullscreen;
+      define("exitFullscreen", {
+        value: async function exitFullscreen(...args) {
+          try {
+            return await Reflect.apply(origExitFs, this, args);
+          } catch {
+            return Promise.resolve();
+          }
+        },
+        writable: true,
+        configurable: true
+      }, docProto);
+    }
+    if (docProto.webkitExitFullscreen) {
+      const origWebkitExitFs = docProto.webkitExitFullscreen;
+      define("webkitExitFullscreen", {
+        value: async function webkitExitFullscreen(...args) {
+          try {
+            return await Reflect.apply(origWebkitExitFs, this, args);
+          } catch {
+            return Promise.resolve();
+          }
+        },
+        writable: true,
+        configurable: true
+      }, docProto);
+    }
+  }
+
+  if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+    const origMatchMedia = window.matchMedia.bind(window);
+    define("matchMedia", {
+      value: function matchMedia(query) {
+        const m = origMatchMedia(query);
+        if (typeof query === "string" && query.includes("display-mode") && query.includes("fullscreen")) {
+          return new Proxy(m, {
+            get(target, prop) {
+              if (prop === "matches") return true;
+              if (prop === "media") return query;
+              const v = target[prop];
+              return typeof v === "function" ? v.bind(target) : v;
+            }
+          });
+        }
+        return m;
+      },
+      writable: true,
+      configurable: true
+    }, window);
+  }
+
+  // Spoof browser as Chrome 153 instead of Electron 44
+  if (typeof navigator !== 'undefined') {
+    let navOwner = navigator;
+    let proto = Object.getPrototypeOf(navigator);
+    while (proto && proto !== Object.prototype) {
+      if (Object.prototype.hasOwnProperty.call(proto, 'userAgent')) {
+        navOwner = proto;
+        break;
+      }
+      proto = Object.getPrototypeOf(proto);
+    }
+    const rawUA = navigator.userAgent || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+    const cleanUA = rawUA.replace(/Electron\/\S+\s*/g, '').replace(/PrismBrowser\/\S+\s*/g, '').replace(/Chrome\/\d+(\.\d+)*/g, 'Chrome/153.0.0.0').replace(/\s{2,}/g, ' ').trim();
+    const rawAV = navigator.appVersion || '5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+    const cleanAV = rawAV.replace(/Electron\/\S+\s*/g, '').replace(/PrismBrowser\/\S+\s*/g, '').replace(/Chrome\/\d+(\.\d+)*/g, 'Chrome/153.0.0.0').replace(/\s{2,}/g, ' ').trim();
+
+    define('userAgent', { get: () => cleanUA, configurable: true }, navOwner);
+    define('appVersion', { get: () => cleanAV, configurable: true }, navOwner);
+    define('vendor', { get: () => 'Google Inc.', configurable: true }, navOwner);
+
+    const brands = [
+      { brand: 'Chromium', version: '153' },
+      { brand: 'Google Chrome', version: '153' },
+      { brand: 'Not(A:Brand', version: '24' }
+    ];
+    const fullVersionList = [
+      { brand: 'Chromium', version: '153.0.0.0' },
+      { brand: 'Google Chrome', version: '153.0.0.0' },
+      { brand: 'Not(A:Brand', version: '24.0.0.0' }
+    ];
+    const platform = (navigator.platform && !/electron/i.test(navigator.platform))
+      ? (navigator.platform.includes('Linux') ? 'Linux' : navigator.platform.includes('Win') ? 'Windows' : navigator.platform.includes('Mac') ? 'macOS' : 'Linux')
+      : 'Linux';
+    const fakeUad = {
+      brands,
+      mobile: false,
+      platform,
+      getHighEntropyValues: async (hints = []) => {
+        const res = { brands, mobile: false, platform };
+        if (hints.includes('platformVersion')) res.platformVersion = '6.6.0';
+        if (hints.includes('architecture')) res.architecture = 'x86';
+        if (hints.includes('model')) res.model = '';
+        if (hints.includes('uaFullVersion')) res.uaFullVersion = '153.0.0.0';
+        if (hints.includes('fullVersionList')) res.fullVersionList = fullVersionList;
+        if (hints.includes('bitness')) res.bitness = '64';
+        if (hints.includes('wow64')) res.wow64 = false;
+        return res;
+      },
+      toJSON: () => ({ brands, mobile: false, platform })
+    };
+    define('userAgentData', { get: () => fakeUad, configurable: true }, navOwner);
+  }
+
+  if (typeof window !== 'undefined' && (!window.chrome || !window.chrome.app)) {
+    const fakeChrome = {
+      app: {
+        isInstalled: false,
+        InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+        RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
+        getDetails: () => null,
+        getIsInstalled: () => false,
+        runningState: () => 'cannot_run'
+      },
+      csi: () => {},
+      loadTimes: () => ({
+        requestTime: (Date.now() - 1000) / 1000,
+        startLoadTime: (Date.now() - 1000) / 1000,
+        commitLoadTime: (Date.now() - 800) / 1000,
+        finishDocumentLoadTime: (Date.now() - 500) / 1000,
+        firstPaintTime: (Date.now() - 600) / 1000,
+        firstPaintAfterLoadTime: 0,
+        navigationType: 'Other',
+        wasFetchedViaSpdy: false,
+        wasNpnNegotiated: false,
+        npnNegotiatedProtocol: 'unknown',
+        wasAlternateProtocolAvailable: false,
+        connectionInfo: 'unknown'
+      })
+    };
+    define('chrome', { value: fakeChrome, writable: true, configurable: true }, window);
+  }
+  // Intercept screensharing displaySurface reporting
+  let spoofedTracks;
+  try { spoofedTracks = new WeakMap(); } catch {}
+
+  if (typeof window !== 'undefined' && window.MediaStreamTrack?.prototype) {
+    const trackProto = window.MediaStreamTrack.prototype;
+    const protoGetSettings = trackProto.getSettings;
+    if (typeof protoGetSettings === 'function') {
+      define('getSettings', {
+        value: function getSettings() {
+          const s = Reflect.apply(protoGetSettings, this, []);
+          const target = spoofedTracks?.get(this);
+          if (target && s) {
+            s.displaySurface = target;
+            if (target === 'browser') s.logicalSurface = true;
+          }
+          return s;
+        },
+        writable: true,
+        configurable: true
+      }, trackProto);
+    }
+    const protoGetCaps = trackProto.getCapabilities;
+    if (typeof protoGetCaps === 'function') {
+      define('getCapabilities', {
+        value: function getCapabilities() {
+          const c = Reflect.apply(protoGetCaps, this, []);
+          const target = spoofedTracks?.get(this);
+          if (target && c) {
+            c.displaySurface = target;
+          }
+          return c;
+        },
+        writable: true,
+        configurable: true
+      }, trackProto);
+    }
+    const protoLabelDesc = Object.getOwnPropertyDescriptor(trackProto, 'label');
+    if (protoLabelDesc?.get) {
+      define('label', {
+        get: function label() {
+          const target = spoofedTracks?.get(this);
+          if (target) {
+            return target === 'browser' ? 'Google Chrome Tab' : 'screen:0:0';
+          }
+          return Reflect.apply(protoLabelDesc.get, this, []);
+        },
+        configurable: true
+      }, trackProto);
+    }
+  }
+
+  if (typeof navigator !== 'undefined' && navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function') {
+    let mediaOwner = navigator.mediaDevices;
+    const proto = Object.getPrototypeOf(navigator.mediaDevices);
+    if (proto && Object.prototype.hasOwnProperty.call(proto, 'getDisplayMedia')) {
+      mediaOwner = proto;
+    }
+    const origGetDisplayMedia = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
+
+    const patchTrack = (track, surface) => {
+      if (!track) return;
+      if (spoofedTracks) spoofedTracks.set(track, surface);
+      if (typeof track.getSettings === 'function') {
+        const origGetSettings = track.getSettings.bind(track);
+        track.getSettings = function getSettings() {
+          const s = origGetSettings();
+          if (s) {
+            s.displaySurface = surface;
+            if (surface === 'browser') s.logicalSurface = true;
+          }
+          return s;
+        };
+      }
+      if (typeof track.getCapabilities === 'function') {
+        const origGetCaps = track.getCapabilities.bind(track);
+        track.getCapabilities = function getCapabilities() {
+          const c = origGetCaps();
+          if (c) c.displaySurface = surface;
+          return c;
+        };
+      }
+      try {
+        const fakeLabel = (surface === 'browser') ? 'Google Chrome Tab' : 'screen:0:0';
+        Object.defineProperty(track, 'label', {
+          get: () => fakeLabel,
+          configurable: true
+        });
+      } catch {}
+      if (typeof track.clone === 'function') {
+        const origClone = track.clone.bind(track);
+        track.clone = function clone() {
+          const cloned = origClone();
+          patchTrack(cloned, surface);
+          return cloned;
+        };
+      }
+    };
+
+    const wrappedGetDisplayMedia = async function getDisplayMedia(constraints) {
+      let cleanConstraints = constraints;
+      if (constraints && typeof constraints === 'object') {
+        cleanConstraints = { ...constraints };
+        if (cleanConstraints.video && typeof cleanConstraints.video === 'object') {
+          cleanConstraints.video = { ...cleanConstraints.video };
+          delete cleanConstraints.video.displaySurface;
+          delete cleanConstraints.video.width;
+          delete cleanConstraints.video.height;
+        }
+      }
+      const stream = await origGetDisplayMedia(cleanConstraints);
+      try {
+        const targetSurface = window.__prism_report_display_surface;
+        if (targetSurface && (targetSurface === 'monitor' || targetSurface === 'browser')) {
+          const tracks = (typeof stream.getVideoTracks === 'function') ? stream.getVideoTracks() : [];
+          for (const track of tracks) {
+            patchTrack(track, targetSurface);
+          }
+        }
+        const allTracks = (typeof stream.getVideoTracks === 'function') ? stream.getVideoTracks() : [];
+        for (const track of allTracks) {
+          if (typeof track.addEventListener === 'function') {
+            track.addEventListener('ended', () => {
+              try { console.info('__prism_screenshare_ended__'); } catch {}
+            }, { once: true });
+          }
+        }
+      } catch {}
+      return stream;
+    };
+
+    define('getDisplayMedia', {
+      value: wrappedGetDisplayMedia,
+      writable: true,
+      configurable: true
+    }, mediaOwner);
+  }
+
 
   // Keep Chromium's actual selection so native copy, drag selection and editing
   // still work. Only the page-facing selection read APIs report an empty range.
@@ -340,12 +720,44 @@ class FocusController {
   async setEmulation(state, enabled) {
     try {
       if (!state.webContents.isDestroyed() && state.webContents.debugger.isAttached()) {
+        const defaultUA = state.webContents.session?.getUserAgent?.() || '';
+        const chrome153UA = getChromeUserAgent(defaultUA);
+        const uaMetadata = {
+          brands: [
+            { brand: 'Chromium', version: '153' },
+            { brand: 'Google Chrome', version: '153' },
+            { brand: 'Not(A:Brand', version: '24' }
+          ],
+          fullVersionList: [
+            { brand: 'Chromium', version: '153.0.0.0' },
+            { brand: 'Google Chrome', version: '153.0.0.0' },
+            { brand: 'Not(A:Brand', version: '24.0.0.0' }
+          ],
+          fullVersion: '153.0.0.0',
+          platform: process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : 'Linux',
+          platformVersion: '6.6.0',
+          architecture: 'x86',
+          model: '',
+          mobile: false,
+          bitness: '64',
+          wow64: false
+        };
+        const uaParams = enabled
+          ? { userAgent: chrome153UA, userAgentMetadata: uaMetadata }
+          : { userAgent: defaultUA };
         const results = await Promise.allSettled([
+          state.webContents.debugger.sendCommand('Emulation.setUserAgentOverride', uaParams),
           state.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled }),
-          ...[...state.frameSessions].map(async ([id, session]) => {
-            try { await state.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled }, id); }
-            catch (error) { if (state.frameSessions.get(id) === session) throw error; }
-          }),
+          ...[...state.frameSessions].flatMap(([id, session]) => [
+            (async () => {
+              try { await state.webContents.debugger.sendCommand('Emulation.setUserAgentOverride', uaParams, id); }
+              catch (error) { if (state.frameSessions.get(id) === session) throw error; }
+            })(),
+            (async () => {
+              try { await state.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled }, id); }
+              catch (error) { if (state.frameSessions.get(id) === session) throw error; }
+            })(),
+          ]),
         ]);
         const failed = results.find(result => result.status === 'rejected');
         if (failed) throw failed.reason;
@@ -444,6 +856,10 @@ class FocusController {
     await state.chain.catch(() => {});
     await this.setEmulation(state, false);
     if (state.webContents.isDestroyed()) return;
+    if (state.webContents.debugger.isAttached()) {
+      const defaultUA = state.webContents.session?.getUserAgent?.() || '';
+      await state.webContents.debugger.sendCommand('Emulation.setUserAgentOverride', { userAgent: defaultUA }).catch(() => {});
+    }
     if (state.scriptId && state.webContents.debugger.isAttached()) {
       await state.webContents.debugger.sendCommand('Page.removeScriptToEvaluateOnNewDocument', { identifier: state.scriptId }).catch(() => {});
     }
@@ -457,4 +873,4 @@ class FocusController {
   }
 }
 
-module.exports = { FocusController, buildFocusScript };
+module.exports = { FocusController, buildFocusScript, getChromeUserAgent };

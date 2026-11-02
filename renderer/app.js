@@ -103,6 +103,9 @@ function makePreviewBridge() {
         return {ok:false, canceled:true, unavailable:true};
       case 'network-clear': return {ok:true};
       case 'network-export': toast('Open the desktop app to capture and export real network traffic.');return;
+      case 'screenshare-select': return { ok: true };
+      case 'window-fullscreen-toggle': (data.isFullscreen = !data.isFullscreen); return { ok: true, isFullScreen: data.isFullscreen };
+      case 'window-fullscreen-exit': data.isFullscreen = false; return { ok: true, isFullScreen: false };
       case 'viewport': return;
       case 'zoom': current.zoom=Math.max(.25,Math.min(3,(current.zoom||1)+payload.delta));break;
       default: toast('This control is available in the desktop app.');return;
@@ -112,13 +115,14 @@ function makePreviewBridge() {
 const bridge = window.prism || makePreviewBridge();
 async function invoke(action, payload) { try { const result = await bridge.invoke(action, payload); if (result?.error && !result?.tabs) throw new Error(typeof result.error==='string' ? result.error : result.error.message || 'The action could not be completed.'); return result; } catch (error) { toast(error.message || 'Something went wrong.', true); return undefined; } }
 function requestViewport() { clearTimeout(viewportTimer);viewportTimer=setTimeout(sendViewport, 30); }
-function sendViewport() { const rect=$('#viewport').getBoundingClientRect();const bounds={x:Math.round(rect.x),y:Math.round(rect.y),width:Math.max(0,Math.floor(rect.width)),height:Math.max(0,Math.floor(rect.height)),visible:!isHome() && !$('#modal').open && !activeTab()?.error && !preview}; const signature=JSON.stringify(bounds);if(signature===lastBounds)return;lastBounds=signature;invoke('viewport',bounds); }
+function sendViewport() { const isFull=document.body.classList.contains('fullscreen-mode');const rect=isFull?{x:0,y:0,width:window.innerWidth,height:window.innerHeight}:$('#viewport').getBoundingClientRect();const bounds={x:Math.round(rect.x),y:Math.round(rect.y),width:Math.max(0,Math.floor(rect.width)),height:Math.max(0,Math.floor(rect.height)),visible:!isHome() && !$('#modal').open && !activeTab()?.error && !preview}; const signature=JSON.stringify(bounds);if(signature===lastBounds)return;lastBounds=signature;invoke('viewport',bounds); }
 
 function renderState(next) {
   if (!next || !Array.isArray(next.tabs)) return;
   const previousIds = new Set(state.tabs.map(tab => tab.id));
   if(next.activeTabId!==state.activeTabId)lastBounds='';
   state = {...state,...next}; state.rules ||= [];state.bookmarks ||= [];state.history ||= [];state.downloads ||= [];
+  document.body.classList.toggle('fullscreen-mode', Boolean(state.isFullscreen));
   state.typing={...defaultTyping,...state.typing};state.search={...defaultSearch,...state.search};state.proxy={...defaultProxy,...state.proxy};state.adblock={...defaultAdblock,...state.adblock};
   renderTabs();renderChrome();renderHome();
   const signature=JSON.stringify([pane,state.rules,state.downloads,state.bookmarks,state.history,state.activeTabId,activeTab()?.url,state.networkPaused,state.profilePath,state.typing,state.search,state.proxy,{enabled:state.adblock.enabled,allowlist:state.adblock.allowlist,blocklist:state.adblock.blocklist}]);
@@ -466,6 +470,181 @@ async function cookiesModal() {
   showModal(`<div class="modal-header"><h2>Stored cookies</h2><button class="icon-button" data-action="close-modal" aria-label="Close dialog">${icon('close')}</button></div><div class="modal-body"><p>${description} Values stay local to this inspector.</p><div class="cookie-list">${cookies.length?cookies.map(cookie=>`<details class="cookie-item"><summary>${escape(cookie.name)} <span class="muted">· ${escape(cookie.domain)}</span></summary><pre>${escape(JSON.stringify(cookie,null,2))}</pre></details>`).join(''):'<p>No cookies are stored for this selection.</p>'}</div><div class="modal-footer cookie-actions"><button class="secondary-button" data-cookie-export="${scope}">${icon('export')}${exportLabel}</button><button class="primary-button" data-cookie-import="${scope}">${icon('folder')}${importLabel}</button><button class="secondary-button" data-action="close-modal">Close</button></div></div>`);
 }
 function confirmModal(title,description,buttonText,action) {showModal(`<div class="modal-header"><h2>${escape(title)}</h2><button class="icon-button" data-action="close-modal" aria-label="Close dialog">${icon('close')}</button></div><div class="modal-body"><p>${escape(description)}</p><div class="modal-footer"><button class="secondary-button" data-action="close-modal">Cancel</button><button class="danger-button" id="confirm-action">${escape(buttonText)}</button></div></div>`);$('#confirm-action').addEventListener('click',async()=>{closeModal();await action();});}
+function showScreenshareModal(data) {
+  const { requestId, requestingOrigin, audioRequested, spoofActive = false, screens = [], tabs = [] } = data || {};
+  let reportAsManuallyChanged = false;
+  let activeTabType = screens.length ? 'screen' : 'tab';
+  let selectedId = activeTabType === 'screen' ? screens[0]?.id : (tabs.find(t => t.isActive)?.id || tabs[0]?.id);
+  let responded = false;
+
+  const modalEl = $('#modal');
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      respond(null);
+    }
+  };
+  const respond = (selection) => {
+    if (responded) return;
+    responded = true;
+    modalEl.removeEventListener('close', onClose);
+    modalEl.removeEventListener('keydown', onKey);
+    closeModal();
+    invoke('screenshare-select', { requestId, selection });
+  };
+  const onClose = () => {
+    if (!responded) {
+      responded = true;
+      modalEl.removeEventListener('keydown', onKey);
+      invoke('screenshare-select', { requestId, selection: null });
+    }
+  };
+  modalEl.addEventListener('close', onClose, { once: true });
+  modalEl.addEventListener('keydown', onKey);
+
+  const screensHtml = screens.map(s => `
+    <div class="screenshare-card ${activeTabType === 'screen' && s.id === selectedId ? 'selected' : ''}" data-type="screen" data-id="${escape(s.id)}" tabindex="0">
+      <div class="screenshare-thumb-wrap">
+        ${s.thumbnail ? `<img class="screenshare-thumb" src="${s.thumbnail}" alt="${escape(s.name)}">` : `<div class="screenshare-thumb-placeholder">${icon('panel')}</div>`}
+      </div>
+      <div class="screenshare-item-title" title="${escape(s.name)}">${escape(s.name)}</div>
+    </div>
+  `).join('');
+
+  const tabsHtml = tabs.map(t => `
+    <div class="screenshare-tab-row ${activeTabType === 'tab' && t.id === selectedId ? 'selected' : ''}" data-type="tab" data-id="${escape(t.id)}" tabindex="0">
+      <div class="screenshare-tab-favicon-wrap">
+        ${t.favicon ? `<img class="screenshare-tab-favicon" src="${escape(t.favicon)}" alt="">` : `<span class="screenshare-tab-fallback">${icon('globe')}</span>`}
+      </div>
+      <div class="screenshare-tab-details">
+        <div class="screenshare-tab-title" title="${escape(t.title)}">${escape(t.title || 'Untitled')}</div>
+        <div class="screenshare-tab-url" title="${escape(t.url)}">${escape(t.url)}</div>
+      </div>
+      ${t.isActive ? `<span class="screenshare-badge">Active</span>` : ''}
+    </div>
+  `).join('');
+
+  const html = `
+    <div class="modal-header">
+      <div>
+        <h2>Share your screen</h2>
+        <p class="screenshare-origin">${escape(requestingOrigin || 'This site')} wants to share the contents of your screen or a tab.</p>
+      </div>
+      <button class="icon-button" id="screenshare-close-btn" aria-label="Close dialog">${icon('close')}</button>
+    </div>
+    <div class="modal-body screenshare-container">
+      <div class="screenshare-nav" role="tablist">
+        <button type="button" class="screenshare-nav-btn ${activeTabType === 'screen' ? 'active' : ''}" data-nav="screen">${icon('panel')} Entire Screen</button>
+        <button type="button" class="screenshare-nav-btn ${activeTabType === 'tab' ? 'active' : ''}" data-nav="tab">${icon('globe')} Browser Tab</button>
+      </div>
+      <div class="screenshare-panels">
+        <div id="screenshare-panel-screen" class="screenshare-panel ${activeTabType === 'screen' ? 'active' : ''}">
+          <div class="screenshare-grid">
+            ${screensHtml || '<p class="muted">No screens available.</p>'}
+          </div>
+        </div>
+        <div id="screenshare-panel-tab" class="screenshare-panel ${activeTabType === 'tab' ? 'active' : ''}">
+          <div class="screenshare-list">
+            ${tabsHtml || '<p class="muted">No tabs available.</p>'}
+          </div>
+        </div>
+      </div>
+      ${spoofActive ? `
+        <div class="screenshare-report-row">
+          <label for="screenshare-report-as" class="screenshare-report-label">Report to website as:</label>
+          <select id="screenshare-report-as" class="screenshare-report-select">
+            <option value="screen" ${activeTabType === 'screen' ? 'selected' : ''}>Full screen</option>
+            <option value="tab" ${activeTabType === 'tab' ? 'selected' : ''}>Single tab</option>
+          </select>
+        </div>
+      ` : ''}
+      ${audioRequested ? `
+        <label class="checkbox-label screenshare-audio-label">
+          <input type="checkbox" id="screenshare-audio-toggle" checked>
+          Share audio
+        </label>
+      ` : ''}
+      <div class="modal-footer">
+        <button type="button" class="secondary-button" id="screenshare-cancel-btn">Cancel</button>
+        <button type="button" class="primary-button" id="screenshare-confirm-btn" ${!selectedId ? 'disabled' : ''}>Share</button>
+      </div>
+    </div>
+  `;
+
+  showModal(html);
+
+  const reportSelect = $('#screenshare-report-as');
+  if (reportSelect) {
+    reportSelect.addEventListener('change', () => {
+      reportAsManuallyChanged = true;
+    });
+  }
+
+  const updateUI = () => {
+    const screensPanel = $('#screenshare-panel-screen');
+    const tabsPanel = $('#screenshare-panel-tab');
+    if (screensPanel && tabsPanel) {
+      screensPanel.classList.toggle('active', activeTabType === 'screen');
+      tabsPanel.classList.toggle('active', activeTabType === 'tab');
+    }
+    $$('.screenshare-nav-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.nav === activeTabType);
+    });
+    $$('.screenshare-card, .screenshare-tab-row').forEach(el => {
+      const isSelected = (el.dataset.type === activeTabType && el.dataset.id === selectedId);
+      el.classList.toggle('selected', isSelected);
+    });
+    const confirmBtn = $('#screenshare-confirm-btn');
+    if (confirmBtn) confirmBtn.disabled = !selectedId;
+    if (reportSelect && !reportAsManuallyChanged) {
+      reportSelect.value = activeTabType === 'screen' ? 'screen' : 'tab';
+    }
+  };
+
+  const submit = () => {
+    if (!selectedId) return;
+    const audio = audioRequested ? Boolean($('#screenshare-audio-toggle')?.checked) : false;
+    const reportAs = spoofActive ? ($('#screenshare-report-as')?.value || activeTabType) : activeTabType;
+    respond({ type: activeTabType, id: selectedId, audio, reportAs });
+  };
+
+  $$('.screenshare-nav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeTabType = btn.dataset.nav;
+      if (activeTabType === 'screen') {
+        selectedId = screens[0]?.id;
+      } else {
+        selectedId = tabs.find(t => t.isActive)?.id || tabs[0]?.id;
+      }
+      updateUI();
+    });
+  });
+
+  $$('.screenshare-card, .screenshare-tab-row').forEach(item => {
+    item.addEventListener('click', () => {
+      selectedId = item.dataset.id;
+      activeTabType = item.dataset.type;
+      updateUI();
+    });
+    item.addEventListener('dblclick', () => {
+      selectedId = item.dataset.id;
+      activeTabType = item.dataset.type;
+      submit();
+    });
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        selectedId = item.dataset.id;
+        activeTabType = item.dataset.type;
+        submit();
+      }
+    });
+  });
+
+  $('#screenshare-confirm-btn')?.addEventListener('click', submit);
+  $('#screenshare-cancel-btn')?.addEventListener('click', () => respond(null));
+  $('#screenshare-close-btn')?.addEventListener('click', () => respond(null));
+}
+
 const actions = {
   'close-pane':()=>{pane=null;renderPane();},'site-rules':()=>openSettingsSection('sites'),'add-rule':()=>ruleModal(),
   'monitor-current':()=>toggleSite('monitor'),'pause-capture':()=>invoke('network-pause',{paused:!state.networkPaused}),
@@ -550,7 +729,7 @@ $('#zoom-out').addEventListener('click',()=>invoke('zoom',{delta:-.1}));$('#zoom
 function openFind(){$('#find-bar').hidden=false;$('#main-surface').classList.add('find-open');$('#find-input').focus();requestViewport();}
 function closeFind(){$('#find-bar').hidden=true;$('#main-surface').classList.remove('find-open');invoke('find-stop');requestViewport();}
 $('#find-close').addEventListener('click',closeFind);$('#find-input').addEventListener('input',()=>invoke('find',{text:$('#find-input').value}));$('#find-input').addEventListener('keydown',event=>{if(event.key==='Enter')invoke('find',{text:$('#find-input').value,forward:!event.shiftKey});if(event.key==='Escape')closeFind();});$('#find-next').addEventListener('click',()=>invoke('find',{text:$('#find-input').value,forward:true}));$('#find-previous').addEventListener('click',()=>invoke('find',{text:$('#find-input').value,forward:false}));
-document.addEventListener('keydown',event=>{const modifier=event.ctrlKey||event.metaKey;if(!modifier)return;const key=event.key.toLowerCase();if(['l','k','t','w','r','f'].includes(key)){event.preventDefault();if(key==='l'||key==='k'){$('#address').focus();$('#address').select();}if(key==='t')newBlankTab();if(key==='w')invoke('tab-close',{id:state.activeTabId});if(key==='r')invoke('reload');if(key==='f')openFind();}if(key==='+'||key==='='){event.preventDefault();invoke('zoom',{delta:.1});}if(key==='-'){event.preventDefault();invoke('zoom',{delta:-.1});}if(key==='0'){event.preventDefault();invoke('zoom',{delta:1-(activeTab()?.zoom||1)});}});
+document.addEventListener('keydown',event=>{const modifier=event.ctrlKey||event.metaKey;if(!modifier){if(event.key==='Escape'){if(document.body.classList.contains('fullscreen-mode')){event.preventDefault();invoke('window-fullscreen-exit');}}return;}const key=event.key.toLowerCase();if(['l','k','t','w','r'].includes(key)){event.preventDefault();if(key==='l'||key==='k'){$('#address').focus();$('#address').select();}if(key==='t')newBlankTab();if(key==='w')invoke('tab-close',{id:state.activeTabId});if(key==='r')invoke('reload');}if(key==='f'){event.preventDefault();invoke('window-fullscreen-toggle');}if(key==='+'||key==='='){event.preventDefault();invoke('zoom',{delta:.1});}if(key==='-'){event.preventDefault();invoke('zoom',{delta:-.1});}if(key==='0'){event.preventDefault();invoke('zoom',{delta:1-(activeTab()?.zoom||1)});} });
 $('#modal').addEventListener('close',requestViewport);$('#modal').addEventListener('cancel',()=>requestViewport());
 window.addEventListener('resize',requestViewport);new ResizeObserver(requestViewport).observe($('#viewport'));new ResizeObserver(updateTabDensity).observe($('#tabs'));
 bridge.on('state',next=>{stateEventVersion++;renderState(next);});
@@ -560,6 +739,8 @@ bridge.on('network-removed',payload=>{const removed=new Set(payload?.ids||[]);en
 bridge.on('network-cleared',()=>{entries=[];selectedEntry=null;state.networkCount=0;if(pane==='network'){renderNetworkList();renderDetails();}renderChrome();});
 bridge.on('network-status',status=>{if(status?.tabId)captureStatus.set(status.tabId,status);if(pane==='network')renderNetwork();});
 bridge.on('find-result',result=>{if(!$('#find-bar').hidden)$('#find-input').setAttribute('title',`${result?.activeMatchOrdinal||0} of ${result?.matches||0} matches`);});
+bridge.on('screenshare-request',data=>showScreenshareModal(data));
+bridge.on('fullscreen-change',isFull=>{document.body.classList.toggle('fullscreen-mode',Boolean(isFull));requestViewport();});
 bridge.on('shortcut',command=>{const action=typeof command==='string'?command:command?.action;if(action==='address'){$('#address').focus();$('#address').select();}if(action==='find')openFind();if(action==='prepare-new-tab-search')prepareNewTabSearch();if(action==='new-tab-search')focusNewTabSearch(command?.tabId||state.activeTabId);});
 paintIcons();
 const initial=await invoke('get-state');renderState(initial||state);

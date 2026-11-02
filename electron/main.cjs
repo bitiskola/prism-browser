@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, WebContentsView, session, ipcMain, dialog, Menu, shell, nativeImage, clipboard } = require('electron');
+const { app, BrowserWindow, WebContentsView, session, ipcMain, dialog, Menu, shell, nativeImage, clipboard, desktopCapturer } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -9,11 +9,12 @@ const { navigationURL, normalizeRules, normalizeHost, isWebURL } = require('./po
 const { FaviconController, createImageDecoder } = require('./favicon.cjs');
 const { makeCookieExport, parseCookieExportText, cookieSetDetails, cookieDomainInScope, MAX_FILE_BYTES } = require('./cookies.cjs');
 const { NetworkMonitor } = require('./network.cjs');
-const { FocusController } = require('./focus.cjs');
+const { FocusController, getChromeUserAgent } = require('./focus.cjs');
 const { DEFAULT_PREFERENCES, SEARCH_ENGINES, normalizeSearch, normalizeProxy, publicProxyConfig, normalizeTyping } = require('./preferences.cjs');
 const { ProxyController } = require('./proxy.cjs');
 const { AdblockController, normalizeAdblockSettings } = require('./adblock.cjs');
 const { ClipboardTyping } = require('./clipboard-typing.cjs');
+const { handleDisplayMediaSelection } = require('./screenshare.cjs');
 
 app.setName('Prism Browser');
 if (process.platform === 'linux') app.setDesktopName('prism-browser.desktop');
@@ -24,6 +25,7 @@ const profile = app.getPath('userData');
 const stateFile = path.join(profile, 'browser-state.json');
 const shellFile = path.join(__dirname, '../renderer/index.html');
 let win, browserSession, proxy, adblock, favicons, connectionError = '', activeTabId, viewport = { x: 220, y: 100, width: 900, height: 650, visible: true };
+let pendingScreenshare = null, sharedTabId = null;
 let saveTimer, stateTimer, closing = false, flushed = false, proxyChangesInFlight = 0;
 let faviconDecoderView, faviconDecoderReady, faviconDecoderShutdown = false;
 let data = { rules: [], bookmarks: [], history: [], tabs: [], activeIndex: 0,
@@ -85,27 +87,66 @@ function tabState(t) {
     zoom: wc.isDestroyed() ? 1 : wc.getZoomFactor(), focusStatus, focusError: t.focusError || '', inspectorError: t.inspectorError || '' };
 }
 function snapshot() {
+  const active = tabs.get(activeTabId);
+  const isFull = Boolean((win && !win.isDestroyed() && win.isFullScreen()) || active?.isHtmlFullScreen);
   return { tabs: [...tabs.values()].map(tabState), activeTabId, bookmarks: data.bookmarks, history: data.history,
     rules: data.rules, downloads: [...downloads.values()].map(({ item, ...entry }) => entry), profilePath: profile,
     networkPaused: monitor.paused, networkCount: monitor.entries.size,
+    isFullscreen: isFull,
     search: data.search, searchEngines: SEARCH_ENGINES, typing: data.typing,
     proxy: { ...data.proxy, ...proxy?.snapshot(), applying: proxyChangesInFlight > 0, hasCredentials: Boolean(proxy?.getConfig().username || proxy?.getConfig().password), ...(connectionError ? { error: connectionError } : {}) },
     adblock: adblock?.getState() || { ...data.adblock, ready: false, blockedCount: 0 } };
 }
+function checkTabSpoof(url) {
+  if (!url || !isWebURL(url)) return false;
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/\.$/, '');
+    const rules = (Array.isArray(data.rules) ? data.rules : []).filter(r => r && r.focus === true && typeof r.host === 'string');
+    return rules.some(r => {
+      const ruleHost = r.host.toLowerCase().replace(/\.$/, '');
+      return host === ruleHost || (r.includeSubdomains && host.endsWith(`.${ruleHost}`));
+    });
+  } catch { return false; }
+}
+
 function sendState() { clearTimeout(stateTimer); stateTimer = null; emit('state', snapshot()); }
 function scheduleState() { if (!stateTimer) stateTimer = setTimeout(() => { stateTimer = null; sendState(); }, 100); }
+
+function updateFullscreenState() {
+  const active = tabs.get(activeTabId);
+  const isFull = Boolean((win && !win.isDestroyed() && win.isFullScreen()) || active?.isHtmlFullScreen);
+  emit("fullscreen-change", isFull);
+  layout();
+  scheduleState();
+  setTimeout(layout, 50);
+  setTimeout(layout, 150);
+}
 
 function layout() {
   if (!win || win.isDestroyed()) return;
   const [width, height] = win.getContentSize();
+  const active = tabs.get(activeTabId);
+  const isWindowFull = win.isFullScreen();
   for (const tab of tabs.values()) {
-    const show = tab.id === activeTabId && viewport.visible && tab.url !== 'about:blank' && !tab.error;
+    const isShared = (tab.id === sharedTabId);
+    const show = viewport.visible && ((tab.id === activeTabId && tab.url !== 'about:blank' && !tab.error) || isShared);
     tab.view.setVisible(Boolean(show));
     if (show) {
-      const x = Math.max(0, Math.min(width, Math.round(viewport.x)));
-      const y = Math.max(0, Math.min(height, Math.round(viewport.y)));
-      tab.view.setBounds({ x, y, width: Math.max(0, Math.min(width - x, Math.round(viewport.width))), height: Math.max(0, Math.min(height - y, Math.round(viewport.height))) });
+      const isFull = (Boolean(tab.isHtmlFullScreen) || isWindowFull) && (tab.id === activeTabId);
+      if (isFull) {
+        tab.view.setBounds({ x: 0, y: 0, width, height });
+      } else {
+        const x = Math.max(0, Math.min(width, Math.round(viewport.x)));
+        const y = Math.max(0, Math.min(height, Math.round(viewport.y)));
+        tab.view.setBounds({ x, y, width: Math.max(0, Math.min(width - x, Math.round(viewport.width))), height: Math.max(0, Math.min(height - y, Math.round(viewport.height))) });
+      }
     }
+  }
+  if (active && win.contentView.children.includes(active.view) && viewport.visible) {
+    win.contentView.addChildView(active.view);
+  }
+  if (!viewport.visible && win.webContents && !win.webContents.isDestroyed()) {
+    win.webContents.focus();
   }
 }
 function visit(tab) {
@@ -136,6 +177,12 @@ async function instrument(tab) {
 async function refreshPageTools(tab) {
   const wc = tab.view.webContents;
   if (wc.isDestroyed()) return;
+  tab.spoofOnLoad = checkTabSpoof(tab.url);
+  if (tab.spoofOnLoad) {
+    wc.setUserAgent(getChromeUserAgent(browserSession.getUserAgent()));
+  } else {
+    wc.setUserAgent(browserSession.getUserAgent());
+  }
   if (tab.devtoolsRequested || wc.isDevToolsOpened()) {
     tab.focusStatus = { status: 'suspended', error: 'Close Developer Tools to resume spoof mode.' };
     scheduleState();
@@ -169,8 +216,12 @@ async function createTab(url = 'about:blank', activate = true) {
     backgroundThrottling: true
   } });
   const wc = view.webContents;
+  const isSpoof = checkTabSpoof(target);
+  if (isSpoof) {
+    wc.setUserAgent(getChromeUserAgent(browserSession.getUserAgent()));
+  }
   clipboardTyping.attach(wc);
-  const tab = { id, view, url: 'about:blank', title: 'New tab', loading: false, error: '', favicon: '' };
+  const tab = { id, view, url: 'about:blank', title: 'New tab', loading: false, error: '', favicon: '', spoofOnLoad: isSpoof, isHtmlFullScreen: false };
   tabs.set(id, tab);
   adblock?.attach(wc);
   favicons?.attach(wc, id);
@@ -180,8 +231,22 @@ async function createTab(url = 'about:blank', activate = true) {
   wc.on('did-start-loading', () => { tab.loading = true; update(); });
   wc.on('did-stop-loading', () => { tab.loading = false; update(); });
   wc.on('page-title-updated', (_event, title) => { tab.title = title || 'Untitled'; const visit = data.history.find(h => h.url === tab.url); if (visit) visit.title = tab.title; update(); });
-  wc.on('did-navigate', (_event, next) => { tab.url = next; tab.error = ''; visit(tab); layout(); update(); });
+  wc.on('did-navigate', (_event, next) => { tab.url = next; tab.error = ''; tab.isHtmlFullScreen = false; visit(tab); layout(); update(); });
   wc.on('did-navigate-in-page', (_event, next, mainFrame) => { if (mainFrame) { tab.url = next; visit(tab); update(); } });
+  wc.on('enter-html-full-screen', () => {
+    tab.isHtmlFullScreen = true;
+    if (win && !win.isDestroyed() && !win.isFullScreen()) {
+      win.setFullScreen(true);
+    }
+    updateFullscreenState();
+  });
+  wc.on('leave-html-full-screen', () => {
+    tab.isHtmlFullScreen = false;
+    if (win && !win.isDestroyed() && win.isFullScreen() && ![...tabs.values()].some(t => t.isHtmlFullScreen)) {
+      win.setFullScreen(false);
+    }
+    updateFullscreenState();
+  });
   wc.on('did-fail-load', (_event, code, description, failedURL, mainFrame) => {
     if (!mainFrame || code === -3) return;
     tab.url = failedURL || tab.url; tab.error = `${description} (${code})`; tab.loading = false; layout(); update();
@@ -199,9 +264,19 @@ async function createTab(url = 'about:blank', activate = true) {
   wc.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
     const key = input.key.toLowerCase(), mod = input.control || input.meta;
-    if (mod && ['l','f','t','w','r','+','=','-','0'].includes(key)) {
+    if (key === 'f11' || (mod && key === 'f')) {
       event.preventDefault();
-      if (key === 'l' || key === 'f') { win.webContents.focus(); emit('shortcut', key === 'l' ? 'address' : 'find'); }
+      win.setFullScreen(!win.isFullScreen());
+      return;
+    }
+    if (key === 'escape' && win.isFullScreen()) {
+      event.preventDefault();
+      win.setFullScreen(false);
+      return;
+    }
+    if (mod && ['l','t','w','r','+','=','-','0'].includes(key)) {
+      event.preventDefault();
+      if (key === 'l') { win.webContents.focus(); emit('shortcut', 'address'); }
       else if (key === 't') void createTab().catch(error => toast(error.message));
       else if (key === 'w') void closeTab(id);
       else if (key === 'r') wc.reload();
@@ -246,6 +321,12 @@ async function navigate(tab, value) {
   const nextOrigin = isWebURL(url) ? new URL(url).origin : '';
   if (previousOrigin !== nextOrigin || !nextOrigin) tab.favicon = '';
   tab.url = url; tab.error = ''; tab.title = url === 'about:blank' ? 'New tab' : new URL(url).hostname;
+  tab.spoofOnLoad = checkTabSpoof(url);
+  if (tab.spoofOnLoad) {
+    tab.view.webContents.setUserAgent(getChromeUserAgent(browserSession.getUserAgent()));
+  } else {
+    tab.view.webContents.setUserAgent(browserSession.getUserAgent());
+  }
   layout(); sendState();
   try { await tab.view.webContents.loadURL(url); } catch (error) { if (error.code !== 'ERR_ABORTED') { tab.error ||= error.message; layout(); sendState(); } }
   scheduleSave();
@@ -264,6 +345,9 @@ async function closeTab(id) {
   const orderedIds = [...tabs.keys()], index = orderedIds.indexOf(id);
   tabs.delete(id);
   if (activeTabId === id) activeTabId = orderedIds[index + 1] || orderedIds[index - 1];
+  if (win && !win.isDestroyed() && win.isFullScreen() && ![...tabs.values()].some(t => t.isHtmlFullScreen)) {
+    win.setFullScreen(false);
+  }
   if (!tabs.size && !closing) await createTab();
   layout(); sendState(); scheduleSave();
 }
@@ -326,6 +410,29 @@ function closeFaviconDecoder() {
 
 async function configureSession() {
   browserSession = session.fromPartition('persist:prism-default', { cache: true });
+
+  browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const requestHeaders = details.requestHeaders || {};
+    const tab = [...tabs.values()].find(t => t.view.webContents.id === details.webContentsId);
+    const shouldSpoof = tab ? Boolean(tab.spoofOnLoad) : checkTabSpoof(details.url);
+
+    if (shouldSpoof) {
+      for (const key of Object.keys(requestHeaders)) {
+        if (typeof requestHeaders[key] === 'string' && (requestHeaders[key].includes('Electron/') || requestHeaders[key].includes('PrismBrowser/'))) {
+          requestHeaders[key] = getChromeUserAgent(requestHeaders[key]);
+        }
+      }
+      const chUaKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'sec-ch-ua');
+      if (chUaKey) {
+        requestHeaders[chUaKey] = '"Chromium";v="153", "Google Chrome";v="153", "Not(A:Brand";v="24"';
+      }
+      const chFullKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'sec-ch-ua-full-version-list');
+      if (chFullKey) {
+        requestHeaders[chFullKey] = '"Chromium";v="153.0.0.0", "Google Chrome";v="153.0.0.0", "Not(A:Brand";v="24.0.0.0"';
+      }
+    }
+    callback({ requestHeaders });
+  });
   proxy = new ProxyController({ session: browserSession });
   try { await proxy.apply(data.proxy); } catch (error) {
     connectionError = `Proxy setup failed. Open proxy settings before browsing. ${error.message}`;
@@ -336,12 +443,16 @@ async function configureSession() {
   favicons = new FaviconController({ session: browserSession, decode: createImageDecoder(nativeImage, getFaviconDecoderContents),
     canFetch: () => !connectionError && !proxyChangesInFlight,
     onChange: (id, icon) => { const tab = tabs.get(id); if (tab) { tab.favicon = icon; scheduleState(); } } });
-  browserSession.setPermissionCheckHandler((_wc, permission, origin) => grants.has(`${origin}|${permission}`));
+  browserSession.setPermissionCheckHandler((_wc, permission, origin) => {
+    if (permission === 'display-capture' || permission === 'fullscreen' || permission === 'pointerLock') return true;
+    return grants.has(`${origin}|${permission}`);
+  });
   browserSession.setPermissionRequestHandler(async (wc, permission, callback, details) => {
     const tab = [...tabs.values()].find(t => t.view.webContents === wc);
     const requesting = details.requestingUrl || details.requestingOrigin || wc.getURL();
-    const supported = ['media','geolocation','notifications','clipboard-read','fullscreen','pointerLock'];
+    const supported = ['media','geolocation','notifications','clipboard-read','fullscreen','pointerLock','display-capture'];
     if (!tab || !isWebURL(requesting) || !supported.includes(permission)) return callback(false);
+    if (permission === 'display-capture' || permission === 'fullscreen' || permission === 'pointerLock') return callback(true);
     const origin = new URL(requesting).origin;
     if (grants.has(`${origin}|${permission}`)) return callback(true);
     try {
@@ -349,6 +460,147 @@ async function configureSession() {
       if (response === 1) grants.add(`${origin}|${permission}`);
       callback(response === 1);
     } catch { callback(false); }
+  });
+  browserSession.setDisplayMediaRequestHandler(async (request, callback) => {
+    try {
+      if (!win || win.isDestroyed() || closing) return callback(null);
+
+      if (pendingScreenshare) {
+        pendingScreenshare.callback(null);
+        pendingScreenshare = null;
+      }
+      sharedTabId = null;
+      viewport.visible = false;
+      layout();
+      if (win && !win.isDestroyed() && win.webContents && !win.webContents.isDestroyed()) {
+        win.webContents.focus();
+      }
+
+      let rawScreens = [];
+      try {
+        rawScreens = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 320, height: 180 } });
+      } catch (err) {
+        console.error('Failed to get screen sources:', err);
+      }
+
+      const screens = rawScreens.map(s => ({
+        id: s.id,
+        name: s.name || 'Entire screen',
+        thumbnail: s.thumbnail ? s.thumbnail.toDataURL() : ''
+      }));
+
+      const availableTabs = [...tabs.values()].filter(t => !t.view.webContents.isDestroyed() && t.view.webContents.mainFrame);
+      const tabItems = availableTabs.map(t => ({
+        id: t.id,
+        title: t.title || 'Untitled',
+        url: t.url || 'about:blank',
+        favicon: t.favicon || '',
+        isActive: t.id === activeTabId
+      }));
+
+      if (!screens.length && !availableTabs.length) {
+        return callback(null);
+      }
+
+      const requestingOrigin = request.securityOrigin || '';
+      const requestingFrame = request.frame;
+      const requestingTab = [...tabs.values()].find(t =>
+        requestingFrame && t.view && !t.view.webContents.isDestroyed() && t.view.webContents.id === requestingFrame.webContents?.id
+      );
+      const isSpoofActive = requestingTab ? Boolean(requestingTab.spoofOnLoad) : checkTabSpoof(requestingOrigin);
+      const requestId = randomUUID();
+
+      const selectionPromise = new Promise(resolve => {
+        pendingScreenshare = { requestId, resolve, callback };
+      });
+
+      win.webContents.send('prism:screenshare-request', {
+        requestId,
+        requestingOrigin,
+        audioRequested: Boolean(request.audioRequested),
+        spoofActive: isSpoofActive,
+        screens,
+        tabs: tabItems
+      });
+
+      let selection;
+      try {
+        selection = await selectionPromise;
+      } finally {
+        viewport.visible = true;
+        layout();
+      }
+      if (!selection) {
+        sharedTabId = null;
+        viewport.visible = true;
+        layout();
+        return callback(null);
+      }
+      const streams = handleDisplayMediaSelection(selection, screens, availableTabs, request, win, viewport);
+
+      if (streams) {
+        let targetSurface = null;
+        if (isSpoofActive && selection?.reportAs) {
+          targetSurface = (selection.reportAs === 'screen') ? 'monitor' : 'browser';
+        } else if (!isSpoofActive && selection) {
+          targetSurface = (selection.type === 'screen') ? 'monitor' : 'browser';
+        }
+        if (targetSurface) {
+          const code = `window.__prism_report_display_surface = ${JSON.stringify(targetSurface)}; void 0;`;
+          if (requestingFrame && typeof requestingFrame.executeJavaScript === 'function' && !requestingFrame.isDestroyed?.()) {
+            await requestingFrame.executeJavaScript(code).catch(() => {});
+          } else if (requestingTab?.view?.webContents && !requestingTab.view.webContents.isDestroyed()) {
+            await requestingTab.view.webContents.executeJavaScript(code).catch(() => {});
+          }
+        }
+
+        if (selection.type === 'tab') {
+          sharedTabId = selection.id;
+          layout();
+          const chosen = availableTabs.find(t => t.id === selection.id);
+          const cleanup = () => {
+            if (sharedTabId === selection.id) {
+              sharedTabId = null;
+              layout();
+            }
+          };
+          if (chosen && !chosen.view.webContents.isDestroyed()) {
+            chosen.view.webContents.once('destroyed', cleanup);
+            chosen.view.webContents.once('did-start-navigation', cleanup);
+          }
+          if (requestingTab && !requestingTab.view.webContents.isDestroyed()) {
+            requestingTab.view.webContents.once('destroyed', cleanup);
+            requestingTab.view.webContents.once('did-start-navigation', cleanup);
+            const onConsole = (_ev, _lvl, msg) => {
+              if (msg === '__prism_screenshare_ended__') {
+                cleanup();
+                requestingTab?.view?.webContents?.removeListener('console-message', onConsole);
+              }
+            };
+            requestingTab.view.webContents.on('console-message', onConsole);
+          }
+          toast(`Sharing tab "${chosen?.title || 'Tab'}" with ${requestingOrigin || 'site'}.`);
+        } else if (selection.type === 'screen') {
+          sharedTabId = null;
+          layout();
+          const chosenScreen = screens.find(s => s.id === selection.id) || screens[0];
+          toast(`Sharing screen "${chosenScreen?.name || 'Screen'}" with ${requestingOrigin || 'site'}.`);
+        }
+        callback(streams);
+      } else {
+        sharedTabId = null;
+        layout();
+        callback(null);
+      }
+    } catch (err) {
+      console.error('Screenshare handler error:', err);
+      if (pendingScreenshare) {
+        pendingScreenshare = null;
+      }
+      viewport.visible = true;
+      layout();
+      callback(null);
+    }
   });
   browserSession.on('will-download', (_event, item) => {
     const id = randomUUID();
@@ -530,6 +782,30 @@ async function action(name, payload = {}) {
     } break;
     case 'window-minimize': win.minimize(); break;
     case 'window-maximize': win.isMaximized() ? win.unmaximize() : win.maximize(); break;
+    case 'window-fullscreen-toggle': {
+      if (win && !win.isDestroyed()) {
+        win.setFullScreen(!win.isFullScreen());
+        return { ok: true, isFullScreen: win.isFullScreen() };
+      }
+      return { ok: false };
+    }
+    case 'window-fullscreen-exit': {
+      if (win && !win.isDestroyed()) {
+        if (win.isFullScreen()) {
+          win.setFullScreen(false);
+        }
+        return { ok: true, isFullScreen: win.isFullScreen() };
+      }
+      return { ok: false };
+    }
+    case 'screenshare-select': {
+      if (pendingScreenshare && pendingScreenshare.requestId === payload?.requestId) {
+        const resolve = pendingScreenshare.resolve;
+        pendingScreenshare = null;
+        resolve(payload?.selection || null);
+      }
+      return { ok: true };
+    }
     case 'window-close': win.close(); return { ok: true };
     default: throw new Error('Unsupported browser action.');
   }
@@ -547,8 +823,42 @@ async function createWindow() {
   win.on('close', () => clipboardTyping.stop());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.on('resize', layout);
+  win.on('enter-full-screen', () => {
+    const active = tabs.get(activeTabId);
+    if (active) active.isHtmlFullScreen = true;
+    updateFullscreenState();
+  });
+  win.on('enter-html-full-screen', () => {
+    const active = tabs.get(activeTabId);
+    if (active) active.isHtmlFullScreen = true;
+    updateFullscreenState();
+  });
+  win.on('leave-full-screen', () => {
+    const active = tabs.get(activeTabId);
+    if (active) active.isHtmlFullScreen = false;
+    updateFullscreenState();
+  });
+  win.on('leave-html-full-screen', () => {
+    const active = tabs.get(activeTabId);
+    if (active) active.isHtmlFullScreen = false;
+    updateFullscreenState();
+  });
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const key = input.key.toLowerCase(), mod = input.control || input.meta;
+    if (key === 'f11' || (mod && key === 'f')) {
+      event.preventDefault();
+      win.setFullScreen(!win.isFullScreen());
+      return;
+    }
+    if (key === 'escape' && win.isFullScreen()) {
+      event.preventDefault();
+      win.setFullScreen(false);
+      return;
+    }
+  });
   win.on('close', () => { saveState(); closing = true; clearTimeout(saveTimer); });
-  win.on('closed', () => { closeFaviconDecoder(); for (const tab of tabs.values()) { monitor.detach(tab.id); adblock?.detach(tab.view.webContents.id); void focus.detach(tab.id); if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close(); } tabs.clear(); win = null; });
+  win.on('closed', () => { if (pendingScreenshare) { pendingScreenshare.callback(null); pendingScreenshare = null; } sharedTabId = null; closeFaviconDecoder(); for (const tab of tabs.values()) { monitor.detach(tab.id); adblock?.detach(tab.view.webContents.id); void focus.detach(tab.id); if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close(); } tabs.clear(); win = null; });
   await win.loadFile(shellFile);
   const restore = !connectionError && data.tabs.length ? [...data.tabs] : ['about:blank'];
   const selected = data.activeIndex;
@@ -562,6 +872,22 @@ ipcMain.handle('prism:action', (event, name, payload) => {
   return action(name, payload);
 });
 
+app.on('web-contents-created', (_event, contents) => {
+  contents.on('enter-html-full-screen', () => {
+    const active = tabs.get(activeTabId);
+    if (active) active.isHtmlFullScreen = true;
+    if (win && !win.isDestroyed() && !win.isFullScreen()) win.setFullScreen(true);
+    updateFullscreenState();
+  });
+  contents.on('leave-html-full-screen', () => {
+    const active = tabs.get(activeTabId);
+    if (active) active.isHtmlFullScreen = false;
+    if (win && !win.isDestroyed() && win.isFullScreen() && ![...tabs.values()].some(t => t.isHtmlFullScreen)) {
+      win.setFullScreen(false);
+    }
+    updateFullscreenState();
+  });
+});
 app.whenReady().then(async () => {
   readState(); await configureSession(); Menu.setApplicationMenu(null); await createWindow();
   app.on('activate', () => { if (!win) void createWindow(); });

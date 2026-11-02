@@ -83,6 +83,8 @@ test('existing iframe sessions receive document scripts and native focus emulati
       assert.equal(scripts.length, 1);
       assert.equal(scripts[0].params.worldName, undefined, 'website controls must run in the main world');
       assert.equal(commandsFor(f, sessionId, 'Emulation.setFocusEmulationEnabled').at(-1).params.enabled, true);
+      assert.equal(commandsFor(f, sessionId, 'Emulation.setUserAgentOverride').at(-1).params.userAgent.includes('Chrome/153.0.0.0'), true);
+      assert.equal(commandsFor(f, sessionId, 'Emulation.setUserAgentOverride').at(-1).params.userAgent.includes('Electron'), false);
     }
     assert.deepEqual(controller.getStatus('tab'), { status: 'active', error: '', warning: '' });
     assert.equal(f.commands.some(command => command.method === 'Target.setAutoAttach'), false,
