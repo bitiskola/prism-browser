@@ -290,3 +290,63 @@ test('each spoofing feature can be independently deactivated via spoofOptions', 
     assert.equal(window.chrome, undefined);
   }
 });
+
+test('FocusController setEmulation passes correct userAgent and userAgentMetadata for all browsers and platforms', async () => {
+  const { FocusController } = require('../electron/focus.cjs');
+  let currentSpoof = { osPlatform: true, platform: 'win64', browserIdentity: true, browser: 'edge' };
+  const controller = new FocusController({
+    getRules: () => [{ host: 'example.com', focus: true }],
+    getSpoofOptions: () => currentSpoof
+  });
+
+  const sentCommands = [];
+  const fakeState = {
+    closed: false,
+    webContents: {
+      isDestroyed: () => false,
+      session: { getUserAgent: () => 'Original/1.0' },
+      debugger: {
+        isAttached: () => true,
+        sendCommand: async (method, params) => {
+          sentCommands.push({ method, params });
+          return {};
+        }
+      }
+    },
+    frameSessions: new Map()
+  };
+
+  // 1. Edge on win64
+  await controller.setEmulation(fakeState, true);
+  let override = sentCommands.find(c => c.method === 'Emulation.setUserAgentOverride');
+  assert.ok(override, 'setUserAgentOverride command sent');
+  assert.ok(override.params.userAgent.includes('Edg/153.0.0.0'), 'UA contains Edge 153');
+  assert.ok(override.params.userAgent.includes('Windows NT 10.0; Win64; x64'), 'UA contains Windows token');
+  assert.ok(override.params.userAgentMetadata, 'userAgentMetadata present for Edge');
+  assert.ok(override.params.userAgentMetadata.brands.some(b => b.brand === 'Microsoft Edge'));
+
+  // 2. Firefox on linux64 (no userAgentMetadata)
+  sentCommands.length = 0;
+  currentSpoof = { osPlatform: true, platform: 'linux64', browserIdentity: true, browser: 'firefox' };
+  await controller.setEmulation(fakeState, true);
+  override = sentCommands.find(c => c.method === 'Emulation.setUserAgentOverride');
+  assert.ok(override.params.userAgent.includes('Firefox/135.0'), 'UA contains Firefox 135');
+  assert.ok(override.params.userAgent.includes('X11; Linux x86_64'), 'UA contains Linux token');
+  assert.equal(override.params.userAgentMetadata, undefined, 'no userAgentMetadata for Firefox');
+
+  // 3. Safari on macos64 (no userAgentMetadata)
+  sentCommands.length = 0;
+  currentSpoof = { osPlatform: true, platform: 'macos64', browserIdentity: true, browser: 'safari' };
+  await controller.setEmulation(fakeState, true);
+  override = sentCommands.find(c => c.method === 'Emulation.setUserAgentOverride');
+  assert.ok(override.params.userAgent.includes('Version/18.3 Safari/605.1.15'), 'UA contains Safari 18.3');
+  assert.ok(override.params.userAgent.includes('Macintosh; Intel Mac OS X 10_15_7'), 'UA contains Mac token');
+  assert.equal(override.params.userAgentMetadata, undefined, 'no userAgentMetadata for Safari');
+
+  // 4. Disabled emulation restores defaultUA
+  sentCommands.length = 0;
+  await controller.setEmulation(fakeState, false);
+  override = sentCommands.find(c => c.method === 'Emulation.setUserAgentOverride');
+  assert.equal(override.params.userAgent, 'Original/1.0', 'restores default userAgent');
+  assert.equal(override.params.userAgentMetadata, undefined);
+});

@@ -374,25 +374,31 @@ function renderSettingsStatus() {
 }
 function openSettingsSection(section) {forcePane('settings');const target=$(`#settings-${section}`);target?.scrollIntoView({block:'start'});target?.focus({preventScroll:true});}
 const parseDomains=value=>[...new Set(value.split(/[\n,;]+/).map(item=>item.trim()).filter(Boolean))];
+function readSpoofForm() {
+  const osOn = $('#spoof-os-platform')?.checked ?? true;
+  const browOn = $('#spoof-browser-identity')?.checked ?? true;
+  return {
+    focusVisibility: $('#spoof-focus-visibility')?.checked ?? true,
+    fullscreen: $('#spoof-fullscreen')?.checked ?? true,
+    keyboard: $('#spoof-keyboard')?.checked ?? true,
+    clipboardEvents: $('#spoof-clipboard')?.checked ?? true,
+    rightClick: $('#spoof-right-click')?.checked ?? true,
+    selection: $('#spoof-selection')?.checked ?? true,
+    screenshare: $('#spoof-screenshare')?.checked ?? true,
+    osPlatform: osOn,
+    platform: $('#spoof-platform')?.value || 'win64',
+    browserIdentity: browOn,
+    browser: $('#spoof-browser')?.value || 'chrome'
+  };
+}
+
 function captureSettingsDraft(target) {
   if(target.closest('#search-settings-form')){settingsDrafts.search={engine:$('#search-engine').value,customTemplate:$('#search-template').value};$('#custom-search-fields').hidden=$('#search-engine').value!=='custom';}
   if(target.closest('#proxy-settings-form')){settingsDrafts.proxy={enabled:$('#proxy-enabled').checked,type:$('#proxy-type').value,host:$('#proxy-host').value,port:$('#proxy-port').value,bypass:$('#proxy-bypass').value,username:$('#proxy-username').value,password:$('#proxy-password').value,clearAuth:$('#proxy-clear-auth').checked,authTouched:settingsDrafts.proxy?.authTouched||['proxy-username','proxy-password'].includes(target.id)};const socks=$('#proxy-type').value==='socks5';$('#proxy-username').disabled=socks;$('#proxy-password').disabled=socks;}
     if(target.closest('#spoof-settings-form')){
-      const osOn = $('#spoof-os-platform')?.checked ?? true;
-      const browOn = $('#spoof-browser-identity')?.checked ?? true;
-      settingsDrafts.spoof = {
-        focusVisibility: $('#spoof-focus-visibility')?.checked ?? true,
-        fullscreen: $('#spoof-fullscreen')?.checked ?? true,
-        keyboard: $('#spoof-keyboard')?.checked ?? true,
-        clipboardEvents: $('#spoof-clipboard')?.checked ?? true,
-        rightClick: $('#spoof-right-click')?.checked ?? true,
-        selection: $('#spoof-selection')?.checked ?? true,
-        screenshare: $('#spoof-screenshare')?.checked ?? true,
-        osPlatform: osOn,
-        platform: $('#spoof-platform')?.value || 'win64',
-        browserIdentity: browOn,
-        browser: $('#spoof-browser')?.value || 'chrome'
-      };
+      settingsDrafts.spoof = readSpoofForm();
+      const osOn = settingsDrafts.spoof.osPlatform;
+      const browOn = settingsDrafts.spoof.browserIdentity;
       if($('#spoof-platform')){
         $('#spoof-platform').disabled = !osOn;
         const d = $('#spoof-platform').closest('.spoof-card-details');
@@ -422,7 +428,7 @@ async function saveProxySettings(event) {
   if(draft.clearAuth||proxy.type==='socks5'){proxy.username='';proxy.password='';}else if(draft.authTouched){proxy.username=draft.username;proxy.password=draft.password;}
   await savePreference('proxy',proxy,'proxy-save','Proxy settings applied.');
 }
-async function saveSpoofSettings(event){event.preventDefault();captureSettingsDraft($('#spoof-settings-form'));await savePreference('spoof',settingsDrafts.spoof,'spoof-save','Spoof mode preferences saved.');}
+async function saveSpoofSettings(event){event.preventDefault();const spoof=readSpoofForm();settingsDrafts.spoof=spoof;await savePreference('spoof',spoof,'spoof-save','Spoof mode preferences saved.');}
 async function saveAdblockSettings(event) {event.preventDefault();captureSettingsDraft($('#adblock-enabled'));await savePreference('adblock',settingsDrafts.adblock,'adblock-save','Ad blocker settings saved.');}
 async function toggleAdblock() {
   const button=$('#adblock-toggle');button.disabled=true;const adblock={enabled:!state.adblock.enabled,allowlist:state.adblock.allowlist,blocklist:state.adblock.blocklist};

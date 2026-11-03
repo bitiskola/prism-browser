@@ -105,11 +105,16 @@ function snapshot() {
 function getTabUserAgent(isSpoof) {
   if (!isSpoof) return browserSession.getUserAgent();
   const spoofOptions = data.spoof || {};
-  if (spoofOptions.osPlatform !== false) {
-    const platKey = spoofOptions.platform || win64;
-    return SPOOF_PLATFORMS[platKey]?.ua || SPOOF_PLATFORMS.win64.ua;
+  const optOsPlatform = spoofOptions.osPlatform !== false;
+  const optBrowserIdentity = spoofOptions.browserIdentity !== false;
+  if (!optOsPlatform && !optBrowserIdentity) {
+    return browserSession.getUserAgent();
   }
-  return getChromeUserAgent(browserSession.getUserAgent());
+  const hostPlat = process.platform === 'win32' ? 'win64' : process.platform === 'darwin' ? 'macos64' : 'linux64';
+  const targetPlat = optOsPlatform ? (spoofOptions.platform || 'win64') : hostPlat;
+  const targetBrow = optBrowserIdentity ? (spoofOptions.browser || 'chrome') : 'chrome';
+  const profile = getSpoofProfile(targetBrow, targetPlat);
+  return profile.ua;
 }
 
 function checkTabSpoof(url) {
@@ -702,9 +707,30 @@ async function action(name, payload = {}) {
     case 'spoof-save': {
       data.spoof = normalizeSpoof(payload.spoof);
       saveState();
+      const updates = [];
       for (const t of tabs.values()) {
-        void refreshPageTools(t);
+        const isSpoofed = checkTabSpoof(t.url);
+        t.spoofOnLoad = isSpoofed;
+        const wc = t.view?.webContents;
+        if (wc && !wc.isDestroyed()) {
+          wc.setUserAgent(getTabUserAgent(isSpoofed));
+          if (isSpoofed) {
+            updates.push((async () => {
+              try {
+                await refreshPageTools(t);
+                t.error = '';
+                wc.reload();
+              } catch (e) {
+                console.warn('Could not refresh/reload spoofed tab:', e.message);
+              }
+            })());
+          } else {
+            updates.push(refreshPageTools(t));
+          }
+        }
       }
+      await Promise.allSettled(updates);
+      sendState();
       break;
     }
     case 'proxy-save': {

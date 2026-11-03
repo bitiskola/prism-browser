@@ -473,7 +473,7 @@ function patchDocument(rules, spoofOptions = {}) {
   }
 
   // Spoof browser identity (Chrome, Edge, Firefox, Safari) and OS platform
-  if (typeof navigator !== 'undefined') {
+  if (typeof navigator !== 'undefined' && (optOsPlatform || optBrowser)) {
     let navOwner = navigator;
     let proto = Object.getPrototypeOf(navigator);
     while (proto && proto !== Object.prototype) {
@@ -1127,33 +1127,41 @@ class FocusController {
         const defaultUA = state.webContents.session?.getUserAgent?.() || '';
         const spoofOptions = typeof this.getSpoofOptions === 'function' ? this.getSpoofOptions() : {};
         const optOsPlatform = spoofOptions.osPlatform !== false;
-        const targetPlat = spoofOptions.platform || 'win64';
-        const pInfo = SPOOF_PLATFORMS[targetPlat] || SPOOF_PLATFORMS.win64;
+        const optBrowserIdentity = spoofOptions.browserIdentity !== false;
+        const hostPlat = process.platform === 'win32' ? 'win64' : process.platform === 'darwin' ? 'macos64' : 'linux64';
+        const targetPlat = optOsPlatform ? (spoofOptions.platform || 'win64') : hostPlat;
+        const targetBrow = optBrowserIdentity ? (spoofOptions.browser || 'chrome') : 'chrome';
+        const profile = getSpoofProfile(targetBrow, targetPlat);
 
-        const chrome153UA = optOsPlatform ? pInfo.ua : getChromeUserAgent(defaultUA, '');
-        const uaMetadata = {
-          brands: [
-            { brand: 'Chromium', version: '153' },
-            { brand: 'Google Chrome', version: '153' },
-            { brand: 'Not(A:Brand', version: '24' }
-          ],
-          fullVersionList: [
-            { brand: 'Chromium', version: '153.0.0.0' },
-            { brand: 'Google Chrome', version: '153.0.0.0' },
-            { brand: 'Not(A:Brand', version: '24.0.0.0' }
-          ],
-          fullVersion: '153.0.0.0',
-          platform: optOsPlatform ? pInfo.uadPlatform : (process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : 'Linux'),
-          platformVersion: optOsPlatform ? pInfo.platformVersion : '6.6.0',
-          architecture: optOsPlatform ? pInfo.architecture : 'x86',
-          model: '',
-          mobile: false,
-          bitness: optOsPlatform ? pInfo.bitness : '64',
-          wow64: optOsPlatform ? pInfo.wow64 : false
-        };
-        const uaParams = enabled
-          ? { userAgent: chrome153UA, userAgentMetadata: uaMetadata }
-          : { userAgent: defaultUA };
+        let targetUA = profile.ua;
+        if (!optOsPlatform && !optBrowserIdentity) {
+          targetUA = defaultUA;
+        }
+
+        let uaParams;
+        if (enabled) {
+          if (profile.hasUad && (optBrowserIdentity || optOsPlatform)) {
+            uaParams = {
+              userAgent: targetUA,
+              userAgentMetadata: {
+                brands: profile.brands,
+                fullVersionList: profile.fullVersionList,
+                fullVersion: '153.0.0.0',
+                platform: profile.uadPlatform,
+                platformVersion: profile.platformVersion,
+                architecture: profile.architecture,
+                model: '',
+                mobile: false,
+                bitness: profile.bitness,
+                wow64: profile.wow64
+              }
+            };
+          } else {
+            uaParams = { userAgent: targetUA };
+          }
+        } else {
+          uaParams = { userAgent: defaultUA };
+        }
         const results = await Promise.allSettled([
           state.webContents.debugger.sendCommand('Emulation.setUserAgentOverride', uaParams),
           state.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled }),
