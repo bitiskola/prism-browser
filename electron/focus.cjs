@@ -525,16 +525,114 @@ function patchDocument(rules) {
     }
   }
 
-  const stop = event => {
-    // Never preventDefault here: Chromium must still type, select and copy/paste.
+  const isEditable = el => {
+    if (!el || typeof el !== 'object' || el.nodeType !== 1) return false;
+    const tag = (el.tagName || '').toUpperCase();
+    if (tag === 'TEXTAREA') return !el.readOnly && !el.disabled;
+    if (tag === 'INPUT') {
+      const type = (el.type || 'text').toLowerCase();
+      const textTypes = ['text', 'password', 'search', 'email', 'url', 'tel', 'number', ''];
+      return textTypes.includes(type) && !el.readOnly && !el.disabled;
+    }
+    if (el.isContentEditable) return true;
+    if (el.ownerDocument && el.ownerDocument.designMode === 'on') return true;
+    return false;
+  };
+
+  const isWritingInTextbox = target => {
+    let el = target;
+    if (el && el.nodeType === 3) el = el.parentElement;
+    if (isEditable(el)) return true;
+    if (typeof document !== 'undefined' && document.activeElement && isEditable(document.activeElement)) return true;
+    return false;
+  };
+
+  const isCharacterKey = (event, target) => {
+    const key = event.key;
+    if (!key) return false;
+    const isAltGr = Boolean(event.getModifierState && event.getModifierState('AltGraph'));
+    if (event.ctrlKey && !isAltGr) return false;
+    if (event.metaKey) return false;
+    if (event.altKey && !isAltGr) return false;
+
+    // Single character (letters, numbers, symbols, spaces, Unicode)
+    if (key.length === 1) return true;
+
+    // Enter in multiline textarea or contenteditable writes a newline
+    if (key === 'Enter') {
+      let el = target;
+      if (el && el.nodeType === 3) el = el.parentElement;
+      if (el && (el.tagName === 'TEXTAREA' || el.isContentEditable || el.ownerDocument?.designMode === 'on')) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const handleKeyboard = event => {
+    if (!event.isTrusted && !event.__prism_allowed__) return;
+    const target = event.composedPath?.()[0] || event.target || (typeof document !== 'undefined' ? document.activeElement : null);
+    if (isWritingInTextbox(target) && isCharacterKey(event, target)) {
+      return;
+    }
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  };
+  for (const name of ['keydown', 'keyup', 'keypress']) {
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener(name, handleKeyboard, true);
+      listeners.push([name, handleKeyboard]);
+    }
+  }
+
+  const stopClipboard = event => {
     if (event.isTrusted) event.stopImmediatePropagation();
   };
-  // Boundary events also expose when the cursor enters or leaves the page.
-  // Include over/out because sites often use those bubbling equivalents.
-  for (const name of ['keydown', 'keyup', 'keypress', 'selectionchange', 'selectstart', 'select', 'copy', 'cut', 'paste',
+  for (const name of ['copy', 'cut', 'paste', 'beforecopy', 'beforecut', 'beforepaste']) {
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener(name, stopClipboard, true);
+      listeners.push([name, stopClipboard]);
+    }
+  }
+  for (const name of ['oncopy', 'oncut', 'onpaste', 'onbeforecopy', 'onbeforecut', 'onbeforepaste']) {
+    for (const owner of [
+      (typeof window !== 'undefined' ? window : null),
+      (typeof document !== 'undefined' ? document : null),
+      (typeof HTMLElement !== 'undefined' ? HTMLElement.prototype : null)
+    ]) {
+      if (!owner) continue;
+      define(name, { get: () => null, set: () => {}, configurable: true }, owner);
+    }
+  }
+
+  const handleContextMenu = event => {
+    try {
+      Object.defineProperty(event, 'preventDefault', { configurable: true, value() {} });
+      Object.defineProperty(event, 'returnValue', { configurable: true, get: () => true, set() {} });
+    } catch {}
+    event.stopImmediatePropagation();
+  };
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('contextmenu', handleContextMenu, true);
+    listeners.push(['contextmenu', handleContextMenu]);
+  }
+  for (const owner of [
+    (typeof window !== 'undefined' ? window : null),
+    (typeof document !== 'undefined' ? document : null),
+    (typeof HTMLElement !== 'undefined' ? HTMLElement.prototype : null)
+  ]) {
+    if (!owner) continue;
+    define('oncontextmenu', { get: () => null, set: () => {}, configurable: true }, owner);
+  }
+
+  const stopBoundary = event => {
+    if (event.isTrusted) event.stopImmediatePropagation();
+  };
+  for (const name of ['selectionchange', 'selectstart', 'select',
     'mouseenter', 'mouseleave', 'mouseover', 'mouseout', 'pointerenter', 'pointerleave', 'pointerover', 'pointerout']) {
-    window.addEventListener(name, stop, true);
-    listeners.push([name, stop]);
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener(name, stopBoundary, true);
+      listeners.push([name, stopBoundary]);
+    }
   }
 
   const allowSelection = event => {
@@ -565,8 +663,10 @@ function patchDocument(rules) {
     } catch { /* An unusual event may not accept own-property overrides. */ }
   };
   for (const name of ['pointerdown', 'mousedown']) {
-    window.addEventListener(name, allowSelection, true);
-    listeners.push([name, allowSelection]);
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener(name, allowSelection, true);
+      listeners.push([name, allowSelection]);
+    }
   }
 
   const suppress = event => {

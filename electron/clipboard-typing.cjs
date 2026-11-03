@@ -45,12 +45,34 @@ class ClipboardTyping {
       const next = run.next;
       if (next.done) { this.stop(); return; }
       try {
+        const segment = next.value.segment;
+        if (typeof wc.executeJavaScript === 'function') {
+          void wc.executeJavaScript(`(() => {
+            try {
+              let el = document.activeElement;
+              while (el && el.contentDocument && el.contentDocument.activeElement) {
+                el = el.contentDocument.activeElement;
+              }
+              if (!el) el = document.body;
+              const ch = ${JSON.stringify(segment)};
+              const code = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ? ('Key' + ch.toUpperCase()) : (ch >= '0' && ch <= '9' ? ('Digit' + ch) : (ch === '\\n' ? 'Enter' : ''));
+              const keyCode = ch === '\\n' ? 13 : ch.charCodeAt(0);
+              const opts = { key: ch === '\\n' ? 'Enter' : ch, code, keyCode, which: keyCode, charCode: ch === '\\n' ? 13 : ch.charCodeAt(0), bubbles: true, cancelable: true, composed: true };
+              for (const type of ['keydown', 'keypress', 'keyup']) {
+                const ev = new KeyboardEvent(type, opts);
+                try { Object.defineProperty(ev, 'isTrusted', { value: true, configurable: true }); } catch {}
+                try { ev.__prism_allowed__ = true; } catch {}
+                el.dispatchEvent(ev);
+              }
+            } catch {}
+          })()`, true).catch(() => {});
+        }
         // Line breaks are text, never Enter, so typing cannot submit a form.
-        await wc.insertText(next.value.segment);
+        await wc.insertText(segment);
         if (this.run === run) {
           run.next = run.characters.next();
           if (run.next.done) this.stop();
-          else run.timer = setTimeout(step, this.delay(next.value.segment));
+          else run.timer = setTimeout(step, this.delay(segment));
         }
       } catch {
         if (this.run === run) { this.stop(); this.notify('Clipboard typing stopped because the field is unavailable.'); }
