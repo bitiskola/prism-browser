@@ -350,3 +350,10 @@ test('FocusController setEmulation passes correct userAgent and userAgentMetadat
   assert.equal(override.params.userAgent, 'Original/1.0', 'restores default userAgent');
   assert.equal(override.params.userAgentMetadata, undefined);
 });
+
+test('electron/preload.cjs includes spoof-save in allowed actions Set', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const content = fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8');
+  assert.ok(content.includes("'spoof-save'"), 'preload.cjs actions includes spoof-save');
+});
