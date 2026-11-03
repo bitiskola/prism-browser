@@ -42,6 +42,155 @@ const SPOOF_PLATFORMS = Object.freeze({
   })
 });
 
+const SPOOF_BROWSERS = Object.freeze({
+  chrome: Object.freeze({ id: 'chrome', name: 'Google Chrome' }),
+  edge: Object.freeze({ id: 'edge', name: 'Microsoft Edge' }),
+  firefox: Object.freeze({ id: 'firefox', name: 'Mozilla Firefox' }),
+  safari: Object.freeze({ id: 'safari', name: 'Apple Safari' }),
+});
+
+function getSpoofProfile(browser = 'chrome', platform = 'win64') {
+  const platKey = ['win64', 'linux64', 'macos64'].includes(platform) ? platform : 'win64';
+  const browKey = ['chrome', 'edge', 'firefox', 'safari'].includes(browser) ? browser : 'chrome';
+
+  const osTokens = {
+    win64: {
+      token: 'Windows NT 10.0; Win64; x64',
+      platform: 'Win32',
+      uadPlatform: 'Windows',
+      platformVersion: '15.0.0',
+      architecture: 'x86',
+      bitness: '64',
+      wow64: false,
+      firefoxToken: 'Windows NT 10.0; Win64; x64; rv:135.0',
+      firefoxAppVersion: '5.0 (Windows)'
+    },
+    linux64: {
+      token: 'X11; Linux x86_64',
+      platform: 'Linux x86_64',
+      uadPlatform: 'Linux',
+      platformVersion: '6.6.0',
+      architecture: 'x86',
+      bitness: '64',
+      wow64: false,
+      firefoxToken: 'X11; Linux x86_64; rv:135.0',
+      firefoxAppVersion: '5.0 (X11)'
+    },
+    macos64: {
+      token: 'Macintosh; Intel Mac OS X 10_15_7',
+      platform: 'MacIntel',
+      uadPlatform: 'macOS',
+      platformVersion: '14.5.0',
+      architecture: 'x86',
+      bitness: '64',
+      wow64: false,
+      firefoxToken: 'Macintosh; Intel Mac OS X 10.15; rv:135.0',
+      firefoxAppVersion: '5.0 (Macintosh)'
+    }
+  };
+
+  const p = osTokens[platKey];
+
+  if (browKey === 'edge') {
+    return {
+      browser: 'edge',
+      platform: p.platform,
+      uadPlatform: p.uadPlatform,
+      platformVersion: p.platformVersion,
+      architecture: p.architecture,
+      bitness: p.bitness,
+      wow64: p.wow64,
+      ua: `Mozilla/5.0 (${p.token}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 Edg/153.0.0.0`,
+      appVersion: `5.0 (${p.token}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 Edg/153.0.0.0`,
+      vendor: 'Google Inc.',
+      hasUad: true,
+      hasChromeObj: true,
+      brands: [
+        { brand: 'Chromium', version: '153' },
+        { brand: 'Microsoft Edge', version: '153' },
+        { brand: 'Not(A:Brand', version: '24' }
+      ],
+      fullVersionList: [
+        { brand: 'Chromium', version: '153.0.0.0' },
+        { brand: 'Microsoft Edge', version: '153.0.0.0' },
+        { brand: 'Not(A:Brand', version: '24.0.0.0' }
+      ],
+      chUa: '"Chromium";v="153", "Microsoft Edge";v="153", "Not(A:Brand";v="24"',
+      chFull: '"Chromium";v="153.0.0.0", "Microsoft Edge";v="153.0.0.0", "Not(A:Brand";v="24.0.0.0"'
+    };
+  }
+
+  if (browKey === 'firefox') {
+    return {
+      browser: 'firefox',
+      platform: p.platform,
+      uadPlatform: p.uadPlatform,
+      platformVersion: p.platformVersion,
+      architecture: p.architecture,
+      bitness: p.bitness,
+      wow64: p.wow64,
+      ua: `Mozilla/5.0 (${p.firefoxToken}) Gecko/20100101 Firefox/135.0`,
+      appVersion: p.firefoxAppVersion,
+      vendor: '',
+      hasUad: false,
+      hasChromeObj: false,
+      brands: [],
+      fullVersionList: [],
+      chUa: null,
+      chFull: null
+    };
+  }
+
+  if (browKey === 'safari') {
+    return {
+      browser: 'safari',
+      platform: p.platform,
+      uadPlatform: p.uadPlatform,
+      platformVersion: p.platformVersion,
+      architecture: p.architecture,
+      bitness: p.bitness,
+      wow64: p.wow64,
+      ua: `Mozilla/5.0 (${p.token}) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15`,
+      appVersion: `5.0 (${p.token}) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15`,
+      vendor: 'Apple Computer, Inc.',
+      hasUad: false,
+      hasChromeObj: false,
+      brands: [],
+      fullVersionList: [],
+      chUa: null,
+      chFull: null
+    };
+  }
+
+  // Default: chrome
+  return {
+    browser: 'chrome',
+    platform: p.platform,
+    uadPlatform: p.uadPlatform,
+    platformVersion: p.platformVersion,
+    architecture: p.architecture,
+    bitness: p.bitness,
+    wow64: p.wow64,
+    ua: `Mozilla/5.0 (${p.token}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36`,
+    appVersion: `5.0 (${p.token}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36`,
+    vendor: 'Google Inc.',
+    hasUad: true,
+    hasChromeObj: true,
+    brands: [
+      { brand: 'Chromium', version: '153' },
+      { brand: 'Google Chrome', version: '153' },
+      { brand: 'Not(A:Brand', version: '24' }
+    ],
+    fullVersionList: [
+      { brand: 'Chromium', version: '153.0.0.0' },
+      { brand: 'Google Chrome', version: '153.0.0.0' },
+      { brand: 'Not(A:Brand', version: '24.0.0.0' }
+    ],
+    chUa: '"Chromium";v="153", "Google Chrome";v="153", "Not(A:Brand";v="24"',
+    chFull: '"Chromium";v="153.0.0.0", "Google Chrome";v="153.0.0.0", "Not(A:Brand";v="24.0.0.0"'
+  };
+}
+
 function focusRules(rules) {
   return (Array.isArray(rules) ? rules : []).filter(rule => rule && rule.focus === true && typeof rule.host === 'string')
     .flatMap(rule => {
@@ -115,6 +264,8 @@ function patchDocument(rules, spoofOptions = {}) {
   const optScreenshare = spoofOptions.screenshare !== false;
   const optOsPlatform = spoofOptions.osPlatform !== false;
   const targetPlatformKey = spoofOptions.platform || 'win64';
+  const optBrowser = spoofOptions.browserIdentity !== false;
+  const targetBrowserKey = spoofOptions.browser || 'chrome';
 
   const descriptors = [];
   const listeners = [];
@@ -321,7 +472,7 @@ function patchDocument(rules, spoofOptions = {}) {
     }
   }
 
-  // Spoof browser as Chrome 153 instead of Electron 44, with OS platform spoofing
+  // Spoof browser identity (Chrome, Edge, Firefox, Safari) and OS platform
   if (typeof navigator !== 'undefined') {
     let navOwner = navigator;
     let proto = Object.getPrototypeOf(navigator);
@@ -333,132 +484,157 @@ function patchDocument(rules, spoofOptions = {}) {
       proto = Object.getPrototypeOf(proto);
     }
 
-    const platformDefs = {
+    const platKey = optOsPlatform ? (['win64', 'linux64', 'macos64'].includes(targetPlatformKey) ? targetPlatformKey : 'win64') : (
+      (navigator.platform && navigator.platform.includes('Win')) ? 'win64' : (navigator.platform && navigator.platform.includes('Mac')) ? 'macos64' : 'linux64'
+    );
+    const browKey = optBrowser ? (['chrome', 'edge', 'firefox', 'safari'].includes(targetBrowserKey) ? targetBrowserKey : 'chrome') : 'chrome';
+
+    const osTokens = {
       win64: {
-        ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
-        appVersion: '5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+        token: 'Windows NT 10.0; Win64; x64',
         platform: 'Win32',
         uadPlatform: 'Windows',
         platformVersion: '15.0.0',
         architecture: 'x86',
         bitness: '64',
-        wow64: false
+        wow64: false,
+        firefoxToken: 'Windows NT 10.0; Win64; x64; rv:135.0',
+        firefoxAppVersion: '5.0 (Windows)'
       },
       linux64: {
-        ua: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
-        appVersion: '5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+        token: 'X11; Linux x86_64',
         platform: 'Linux x86_64',
         uadPlatform: 'Linux',
         platformVersion: '6.6.0',
         architecture: 'x86',
         bitness: '64',
-        wow64: false
+        wow64: false,
+        firefoxToken: 'X11; Linux x86_64; rv:135.0',
+        firefoxAppVersion: '5.0 (X11)'
       },
       macos64: {
-        ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
-        appVersion: '5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+        token: 'Macintosh; Intel Mac OS X 10_15_7',
         platform: 'MacIntel',
         uadPlatform: 'macOS',
         platformVersion: '14.5.0',
         architecture: 'x86',
         bitness: '64',
-        wow64: false
+        wow64: false,
+        firefoxToken: 'Macintosh; Intel Mac OS X 10.15; rv:135.0',
+        firefoxAppVersion: '5.0 (Macintosh)'
       }
     };
 
+    const p = osTokens[platKey] || osTokens.win64;
     let cleanUA;
     let cleanAV;
-    let targetPlatform;
-    let uadPlatform;
-    let uadPlatformVersion = '6.6.0';
-    let uadArch = 'x86';
-    let uadBitness = '64';
-    let uadWow64 = false;
-
-    if (optOsPlatform) {
-      const pInfo = platformDefs[targetPlatformKey] || platformDefs.win64;
-      cleanUA = pInfo.ua;
-      cleanAV = pInfo.appVersion;
-      targetPlatform = pInfo.platform;
-      uadPlatform = pInfo.uadPlatform;
-      uadPlatformVersion = pInfo.platformVersion;
-      uadArch = pInfo.architecture;
-      uadBitness = pInfo.bitness;
-      uadWow64 = pInfo.wow64;
-    } else {
-      const rawUA = navigator.userAgent || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
-      cleanUA = rawUA.replace(/Electron\/\S+\s*/g, '').replace(/PrismBrowser\/\S+\s*/g, '').replace(/Chrome\/\d+(\.\d+)*/g, 'Chrome/153.0.0.0').replace(/\s{2,}/g, ' ').trim();
-      const rawAV = navigator.appVersion || '5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
-      cleanAV = rawAV.replace(/Electron\/\S+\s*/g, '').replace(/PrismBrowser\/\S+\s*/g, '').replace(/Chrome\/\d+(\.\d+)*/g, 'Chrome/153.0.0.0').replace(/\s{2,}/g, ' ').trim();
-      targetPlatform = (navigator.platform && !/electron/i.test(navigator.platform))
-        ? (navigator.platform.includes('Linux') ? 'Linux x86_64' : navigator.platform.includes('Win') ? 'Win32' : navigator.platform.includes('Mac') ? 'MacIntel' : 'Linux x86_64')
-        : 'Linux x86_64';
-      uadPlatform = targetPlatform.includes('Linux') ? 'Linux' : targetPlatform.includes('Win') ? 'Windows' : targetPlatform.includes('Mac') ? 'macOS' : 'Linux';
-    }
-
-    define('userAgent', { get: () => cleanUA, configurable: true }, navOwner);
-    define('appVersion', { get: () => cleanAV, configurable: true }, navOwner);
-    define('vendor', { get: () => 'Google Inc.', configurable: true }, navOwner);
-    define('platform', { get: () => targetPlatform, configurable: true }, navOwner);
-
-    const brands = [
+    let targetPlatform = p.platform;
+    let targetVendor = 'Google Inc.';
+    let hasUad = true;
+    let hasChromeObj = true;
+    let brands = [
       { brand: 'Chromium', version: '153' },
       { brand: 'Google Chrome', version: '153' },
       { brand: 'Not(A:Brand', version: '24' }
     ];
-    const fullVersionList = [
+    let fullVersionList = [
       { brand: 'Chromium', version: '153.0.0.0' },
       { brand: 'Google Chrome', version: '153.0.0.0' },
       { brand: 'Not(A:Brand', version: '24.0.0.0' }
     ];
 
-    const fakeUad = {
-      brands,
-      mobile: false,
-      platform: uadPlatform,
-      getHighEntropyValues: async (hints = []) => {
-        const res = { brands, mobile: false, platform: uadPlatform };
-        if (hints.includes('platformVersion')) res.platformVersion = uadPlatformVersion;
-        if (hints.includes('architecture')) res.architecture = uadArch;
-        if (hints.includes('model')) res.model = '';
-        if (hints.includes('uaFullVersion')) res.uaFullVersion = '153.0.0.0';
-        if (hints.includes('fullVersionList')) res.fullVersionList = fullVersionList;
-        if (hints.includes('bitness')) res.bitness = uadBitness;
-        if (hints.includes('wow64')) res.wow64 = uadWow64;
-        return res;
-      },
-      toJSON: () => ({ brands, mobile: false, platform: uadPlatform })
-    };
-    define('userAgentData', { get: () => fakeUad, configurable: true }, navOwner);
-  }
+    if (browKey === 'edge') {
+      cleanUA = `Mozilla/5.0 (${p.token}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 Edg/153.0.0.0`;
+      cleanAV = `5.0 (${p.token}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 Edg/153.0.0.0`;
+      brands = [
+        { brand: 'Chromium', version: '153' },
+        { brand: 'Microsoft Edge', version: '153' },
+        { brand: 'Not(A:Brand', version: '24' }
+      ];
+      fullVersionList = [
+        { brand: 'Chromium', version: '153.0.0.0' },
+        { brand: 'Microsoft Edge', version: '153.0.0.0' },
+        { brand: 'Not(A:Brand', version: '24.0.0.0' }
+      ];
+    } else if (browKey === 'firefox') {
+      cleanUA = `Mozilla/5.0 (${p.firefoxToken}) Gecko/20100101 Firefox/135.0`;
+      cleanAV = p.firefoxAppVersion;
+      targetVendor = '';
+      hasUad = false;
+      hasChromeObj = false;
+    } else if (browKey === 'safari') {
+      cleanUA = `Mozilla/5.0 (${p.token}) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15`;
+      cleanAV = `5.0 (${p.token}) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15`;
+      targetVendor = 'Apple Computer, Inc.';
+      hasUad = false;
+      hasChromeObj = false;
+    } else {
+      cleanUA = `Mozilla/5.0 (${p.token}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36`;
+      cleanAV = `5.0 (${p.token}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36`;
+    }
 
-  if (typeof window !== 'undefined' && (!window.chrome || !window.chrome.app)) {
-    const fakeChrome = {
-      app: {
-        isInstalled: false,
-        InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
-        RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
-        getDetails: () => null,
-        getIsInstalled: () => false,
-        runningState: () => 'cannot_run'
-      },
-      csi: () => {},
-      loadTimes: () => ({
-        requestTime: (Date.now() - 1000) / 1000,
-        startLoadTime: (Date.now() - 1000) / 1000,
-        commitLoadTime: (Date.now() - 800) / 1000,
-        finishDocumentLoadTime: (Date.now() - 500) / 1000,
-        firstPaintTime: (Date.now() - 600) / 1000,
-        firstPaintAfterLoadTime: 0,
-        navigationType: 'Other',
-        wasFetchedViaSpdy: false,
-        wasNpnNegotiated: false,
-        npnNegotiatedProtocol: 'unknown',
-        wasAlternateProtocolAvailable: false,
-        connectionInfo: 'unknown'
-      })
-    };
-    define('chrome', { value: fakeChrome, writable: true, configurable: true }, window);
+    define('userAgent', { get: () => cleanUA, configurable: true }, navOwner);
+    define('appVersion', { get: () => cleanAV, configurable: true }, navOwner);
+    define('vendor', { get: () => targetVendor, configurable: true }, navOwner);
+    define('platform', { get: () => targetPlatform, configurable: true }, navOwner);
+
+    if (hasUad) {
+      const fakeUad = {
+        brands,
+        mobile: false,
+        platform: p.uadPlatform,
+        getHighEntropyValues: async (hints = []) => {
+          const res = { brands, mobile: false, platform: p.uadPlatform };
+          if (hints.includes('platformVersion')) res.platformVersion = p.platformVersion;
+          if (hints.includes('architecture')) res.architecture = p.architecture;
+          if (hints.includes('model')) res.model = '';
+          if (hints.includes('uaFullVersion')) res.uaFullVersion = '153.0.0.0';
+          if (hints.includes('fullVersionList')) res.fullVersionList = fullVersionList;
+          if (hints.includes('bitness')) res.bitness = p.bitness;
+          if (hints.includes('wow64')) res.wow64 = p.wow64;
+          return res;
+        },
+        toJSON: () => ({ brands, mobile: false, platform: p.uadPlatform })
+      };
+      define('userAgentData', { get: () => fakeUad, configurable: true }, navOwner);
+    } else {
+      define('userAgentData', { get: () => undefined, configurable: true }, navOwner);
+    }
+
+    if (typeof window !== 'undefined') {
+      if (hasChromeObj) {
+        if (!window.chrome || !window.chrome.app) {
+          const fakeChrome = {
+            app: {
+              isInstalled: false,
+              InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+              RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
+              getDetails: () => null,
+              getIsInstalled: () => false,
+              runningState: () => 'cannot_run'
+            },
+            csi: () => {},
+            loadTimes: () => ({
+              requestTime: (Date.now() - 1000) / 1000,
+              startLoadTime: (Date.now() - 1000) / 1000,
+              commitLoadTime: (Date.now() - 800) / 1000,
+              finishDocumentLoadTime: (Date.now() - 500) / 1000,
+              firstPaintTime: (Date.now() - 600) / 1000,
+              firstPaintAfterLoadTime: 0,
+              navigationType: 'Other',
+              wasFetchedViaSpdy: false,
+              wasNpnNegotiated: false,
+              npnNegotiatedProtocol: 'unknown',
+              wasAlternateProtocolAvailable: false,
+              connectionInfo: 'unknown'
+            })
+          };
+          define('chrome', { value: fakeChrome, writable: true, configurable: true }, window);
+        }
+      } else {
+        define('chrome', { value: undefined, writable: true, configurable: true }, window);
+      }
+    }
   }
 
   // Intercept screensharing displaySurface reporting
@@ -1107,4 +1283,4 @@ class FocusController {
   }
 }
 
-module.exports = { FocusController, buildFocusScript, getChromeUserAgent, SPOOF_PLATFORMS };
+module.exports = { FocusController, buildFocusScript, getChromeUserAgent, SPOOF_PLATFORMS, SPOOF_BROWSERS, getSpoofProfile };

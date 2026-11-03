@@ -9,8 +9,8 @@ const { navigationURL, normalizeRules, normalizeHost, isWebURL } = require('./po
 const { FaviconController, createImageDecoder } = require('./favicon.cjs');
 const { makeCookieExport, parseCookieExportText, cookieSetDetails, cookieDomainInScope, MAX_FILE_BYTES } = require('./cookies.cjs');
 const { NetworkMonitor } = require('./network.cjs');
-const { FocusController, getChromeUserAgent, SPOOF_PLATFORMS } = require('./focus.cjs');
-const { DEFAULT_PREFERENCES, SEARCH_ENGINES, normalizeSearch, normalizeProxy, publicProxyConfig, normalizeTyping, normalizeSpoof } = require('./preferences.cjs');
+const { FocusController, getChromeUserAgent, SPOOF_PLATFORMS, SPOOF_BROWSERS, getSpoofProfile } = require('./focus.cjs');
+const { DEFAULT_PREFERENCES, SEARCH_ENGINES, normalizeSearch, normalizeProxy, publicProxyConfig, normalizeTyping, normalizeSpoof, SUPPORTED_SPOOF_BROWSERS } = require('./preferences.cjs');
 const { ProxyController } = require('./proxy.cjs');
 const { AdblockController, normalizeAdblockSettings } = require('./adblock.cjs');
 const { ClipboardTyping } = require('./clipboard-typing.cjs');
@@ -423,32 +423,33 @@ async function configureSession() {
 
     if (shouldSpoof) {
       const spoofOptions = data.spoof || {};
-      const optOsPlatform = spoofOptions.osPlatform !== false;
-      const targetPlat = spoofOptions.platform || 'win64';
-      const platInfo = SPOOF_PLATFORMS[targetPlat] || SPOOF_PLATFORMS.win64;
+      const platKey = spoofOptions.osPlatform !== false ? (spoofOptions.platform || 'win64') : (process.platform === 'win32' ? 'win64' : process.platform === 'darwin' ? 'macos64' : 'linux64');
+      const browKey = spoofOptions.browserIdentity !== false ? (spoofOptions.browser || 'chrome') : 'chrome';
+      const profile = getSpoofProfile(browKey, platKey);
 
       for (const key of Object.keys(requestHeaders)) {
         if (typeof requestHeaders[key] === 'string' && (requestHeaders[key].includes('Electron/') || requestHeaders[key].includes('PrismBrowser/'))) {
-          requestHeaders[key] = optOsPlatform ? platInfo.ua : getChromeUserAgent(requestHeaders[key]);
+          requestHeaders[key] = profile.ua;
         }
       }
-      const uaKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'user-agent');
-      if (uaKey && optOsPlatform) {
-        requestHeaders[uaKey] = platInfo.ua;
-      }
+      const uaKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'user-agent') || 'User-Agent';
+      requestHeaders[uaKey] = profile.ua;
+
       const chUaKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'sec-ch-ua');
-      if (chUaKey) {
-        requestHeaders[chUaKey] = '"Chromium";v="153", "Google Chrome";v="153", "Not(A:Brand";v="24"';
-      }
       const chFullKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'sec-ch-ua-full-version-list');
-      if (chFullKey) {
-        requestHeaders[chFullKey] = '"Chromium";v="153.0.0.0", "Google Chrome";v="153.0.0.0", "Not(A:Brand";v="24.0.0.0"';
-      }
-      if (optOsPlatform) {
-        const chPlatformKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'sec-ch-ua-platform') || 'sec-ch-ua-platform';
-        requestHeaders[chPlatformKey] = '"' + platInfo.uadPlatform + '"';
-        const chPlatformVersionKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'sec-ch-ua-platform-version') || 'sec-ch-ua-platform-version';
-        requestHeaders[chPlatformVersionKey] = '"' + platInfo.platformVersion + '"';
+      const chPlatformKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'sec-ch-ua-platform');
+      const chPlatformVersionKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'sec-ch-ua-platform-version');
+
+      if (profile.hasUad) {
+        requestHeaders[chUaKey || 'sec-ch-ua'] = profile.chUa;
+        requestHeaders[chFullKey || 'sec-ch-ua-full-version-list'] = profile.chFull;
+        requestHeaders[chPlatformKey || 'sec-ch-ua-platform'] = '"' + profile.uadPlatform + '"';
+        requestHeaders[chPlatformVersionKey || 'sec-ch-ua-platform-version'] = '"' + profile.platformVersion + '"';
+      } else {
+        if (chUaKey) delete requestHeaders[chUaKey];
+        if (chFullKey) delete requestHeaders[chFullKey];
+        if (chPlatformKey) delete requestHeaders[chPlatformKey];
+        if (chPlatformVersionKey) delete requestHeaders[chPlatformVersionKey];
       }
     }
     callback({ requestHeaders });

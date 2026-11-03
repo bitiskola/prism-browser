@@ -1570,6 +1570,118 @@ button svg { flex-shrink: 0; }
 .switch[aria-checked=true] { background: var(--purple); }
 .switch[aria-checked=true]:after { background: #fff; transform: translateX(12px); }
 
+.switch-input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 28px;
+  height: 16px;
+  background: #3b3943;
+  border-radius: 20px;
+  position: relative;
+  flex-shrink: 0;
+  cursor: pointer;
+  outline: none;
+  border: none;
+  margin: 0;
+  transition: background 0.15s ease;
+  display: inline-block;
+  vertical-align: middle;
+}
+.switch-input::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  background: #a19bab;
+  border-radius: 50%;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.switch-input:checked {
+  background: var(--purple);
+}
+.switch-input:checked::after {
+  background: #ffffff;
+  transform: translateX(12px);
+}
+.switch-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--purple-focus);
+}
+
+.setting-line.form-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  cursor: pointer;
+}
+.setting-line.form-switch span {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  font-weight: 500;
+  color: #dbcee9;
+}
+.setting-line.form-switch span small {
+  font-size: 11px;
+  font-weight: 400;
+  color: #8c8498;
+  margin-top: 2px;
+}
+
+.spoof-card {
+  display: flex;
+  flex-direction: column;
+  background: #1c1b24;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.spoof-card:hover {
+  background: #211f2c;
+  border-color: rgba(255, 255, 255, 0.13);
+}
+.spoof-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.spoof-card-info {
+  flex: 1;
+  min-width: 0;
+}
+.spoof-card-info h4 {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin: 0 0 3px;
+  color: #ded9e7;
+}
+.spoof-card-info p {
+  font-size: 11px;
+  color: #8c8498;
+  line-height: 1.4;
+  margin: 0;
+}
+.spoof-card-details {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  transition: opacity 0.15s ease;
+}
+.spoof-card-details .field-label {
+  margin-bottom: 4px;
+}
+.spoof-card-details .field-input {
+  margin-bottom: 0;
+}
+
 .primary-button, .secondary-button, .danger-button {
   padding: 8px 14px;
   border-radius: 8px;

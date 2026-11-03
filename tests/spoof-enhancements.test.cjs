@@ -4,10 +4,10 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { DEFAULT_PREFERENCES, normalizeSpoof, SUPPORTED_SPOOF_PLATFORMS } = require('../electron/preferences.cjs');
-const { buildFocusScript, getChromeUserAgent, SPOOF_PLATFORMS } = require('../electron/focus.cjs');
+const { DEFAULT_PREFERENCES, normalizeSpoof, SUPPORTED_SPOOF_PLATFORMS, SUPPORTED_SPOOF_BROWSERS } = require('../electron/preferences.cjs');
+const { buildFocusScript, getChromeUserAgent, SPOOF_PLATFORMS, SPOOF_BROWSERS, getSpoofProfile } = require('../electron/focus.cjs');
 
-test('DEFAULT_PREFERENCES includes spoof with all features enabled and platform win64', () => {
+test('DEFAULT_PREFERENCES includes spoof with all features enabled, platform win64 and browser chrome', () => {
   assert.ok(DEFAULT_PREFERENCES.spoof, 'spoof exists in DEFAULT_PREFERENCES');
   assert.equal(DEFAULT_PREFERENCES.spoof.focusVisibility, true);
   assert.equal(DEFAULT_PREFERENCES.spoof.fullscreen, true);
@@ -18,6 +18,8 @@ test('DEFAULT_PREFERENCES includes spoof with all features enabled and platform 
   assert.equal(DEFAULT_PREFERENCES.spoof.screenshare, true);
   assert.equal(DEFAULT_PREFERENCES.spoof.osPlatform, true);
   assert.equal(DEFAULT_PREFERENCES.spoof.platform, 'win64');
+  assert.equal(DEFAULT_PREFERENCES.spoof.browserIdentity, true);
+  assert.equal(DEFAULT_PREFERENCES.spoof.browser, 'chrome');
 });
 
 test('normalizeSpoof validates options and defaults safely', () => {
@@ -31,6 +33,8 @@ test('normalizeSpoof validates options and defaults safely', () => {
   assert.equal(empty.screenshare, true);
   assert.equal(empty.osPlatform, true);
   assert.equal(empty.platform, 'win64');
+  assert.equal(empty.browserIdentity, true);
+  assert.equal(empty.browser, 'chrome');
 
   assert.throws(() => normalizeSpoof(null), /Invalid spoof settings/);
 
@@ -43,7 +47,9 @@ test('normalizeSpoof validates options and defaults safely', () => {
     selection: false,
     screenshare: false,
     osPlatform: true,
-    platform: 'macos64'
+    platform: 'macos64',
+    browserIdentity: true,
+    browser: 'firefox'
   });
   assert.equal(custom.focusVisibility, false);
   assert.equal(custom.fullscreen, true);
@@ -54,14 +60,21 @@ test('normalizeSpoof validates options and defaults safely', () => {
   assert.equal(custom.screenshare, false);
   assert.equal(custom.osPlatform, true);
   assert.equal(custom.platform, 'macos64');
+  assert.equal(custom.browserIdentity, true);
+  assert.equal(custom.browser, 'firefox');
 
   // Invalid platform defaults to win64
   const invalidPlat = normalizeSpoof({ platform: 'android' });
   assert.equal(invalidPlat.platform, 'win64');
 
-  // Linux platform
-  const linuxPlat = normalizeSpoof({ platform: 'linux64' });
-  assert.equal(linuxPlat.platform, 'linux64');
+  // Invalid browser defaults to chrome
+  const invalidBrow = normalizeSpoof({ browser: 'opera' });
+  assert.equal(invalidBrow.browser, 'chrome');
+
+  // Linux platform with Edge
+  const linuxEdge = normalizeSpoof({ platform: 'linux64', browser: 'edge' });
+  assert.equal(linuxEdge.platform, 'linux64');
+  assert.equal(linuxEdge.browser, 'edge');
 });
 
 test('SPOOF_PLATFORMS definitions contain valid headers and UA strings', () => {
@@ -86,6 +99,38 @@ test('SPOOF_PLATFORMS definitions contain valid headers and UA strings', () => {
   assert.equal(SPOOF_PLATFORMS.macos64.platformVersion, '14.5.0');
 });
 
+test('getSpoofProfile generates correct browser and platform profiles', () => {
+  // Chrome on Windows 11
+  const chromeWin = getSpoofProfile('chrome', 'win64');
+  assert.ok(chromeWin.ua.includes('Windows NT 10.0; Win64; x64'));
+  assert.ok(chromeWin.ua.includes('Chrome/153.0.0.0'));
+  assert.equal(chromeWin.vendor, 'Google Inc.');
+  assert.equal(chromeWin.hasUad, true);
+  assert.ok(chromeWin.brands.some(b => b.brand === 'Google Chrome'));
+
+  // Edge on macOS
+  const edgeMac = getSpoofProfile('edge', 'macos64');
+  assert.ok(edgeMac.ua.includes('Macintosh; Intel Mac OS X 10_15_7'));
+  assert.ok(edgeMac.ua.includes('Edg/153.0.0.0'));
+  assert.equal(edgeMac.hasUad, true);
+  assert.ok(edgeMac.brands.some(b => b.brand === 'Microsoft Edge'));
+
+  // Firefox on Linux
+  const firefoxLinux = getSpoofProfile('firefox', 'linux64');
+  assert.ok(firefoxLinux.ua.includes('X11; Linux x86_64; rv:135.0'));
+  assert.ok(firefoxLinux.ua.includes('Firefox/135.0'));
+  assert.equal(firefoxLinux.vendor, '');
+  assert.equal(firefoxLinux.hasUad, false);
+  assert.equal(firefoxLinux.hasChromeObj, false);
+
+  // Safari on Windows
+  const safariWin = getSpoofProfile('safari', 'win64');
+  assert.ok(safariWin.ua.includes('Version/18.3 Safari/605.1.15'));
+  assert.equal(safariWin.vendor, 'Apple Computer, Inc.');
+  assert.equal(safariWin.hasUad, false);
+  assert.equal(safariWin.hasChromeObj, false);
+});
+
 test('toolbar markup contains split button for focus toggle and settings shortcut', () => {
   const html = fs.readFileSync(path.join(__dirname, '../renderer/index.html'), 'utf8');
   assert.ok(html.includes('class="toolbar-split"'), 'contains toolbar-split');
@@ -94,12 +139,22 @@ test('toolbar markup contains split button for focus toggle and settings shortcu
   assert.ok(html.includes('data-icon="chevron-down"'), 'contains chevron-down icon');
 });
 
-test('app.js wires focus settings shortcut to spoof section in preferences', () => {
+test('app.js and styles.css render card layout and custom toggle switches', () => {
   const appJs = fs.readFileSync(path.join(__dirname, '../renderer/app.js'), 'utf8');
+  const stylesCss = fs.readFileSync(path.join(__dirname, '../renderer/styles.css'), 'utf8');
+
   assert.ok(appJs.includes('openSettingsSection(\x27spoof\x27)'), 'wires shortcut to spoof settings');
   assert.ok(appJs.includes('settings-spoof'), 'renders spoof section');
+  assert.ok(appJs.includes('spoof-card'), 'uses spoof-card layout');
   assert.ok(appJs.includes('spoof-os-platform'), 'renders OS platform switch');
   assert.ok(appJs.includes('spoof-platform'), 'renders OS platform select dropdown');
+  assert.ok(appJs.includes('spoof-browser-identity'), 'renders browser identity switch');
+  assert.ok(appJs.includes('spoof-browser'), 'renders browser select dropdown');
+
+  // Verify CSS contains .spoof-card and .switch-input
+  assert.ok(stylesCss.includes('.spoof-card'), 'styles.css defines .spoof-card');
+  assert.ok(stylesCss.includes('.switch-input'), 'styles.css defines .switch-input');
+  assert.ok(stylesCss.includes('.switch-input:checked'), 'styles.css styles checked state');
 });
 
 test('each spoofing feature can be independently deactivated via spoofOptions', async () => {
@@ -138,29 +193,7 @@ test('each spoofing feature can be independently deactivated via spoofOptions', 
     assert.equal(document.fullscreenElement, undefined);
   }
 
-  // 3. When osPlatform is false, navigator.userAgent keeps original OS
-  {
-    const origUA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
-    const document = Object.create({
-      hasFocus() { return true; },
-      location: { href: 'https://example.com' }
-    });
-    const window = {
-      addEventListener() {},
-      removeEventListener() {}
-    };
-    const navigator = {
-      userAgent: origUA,
-      appVersion: origUA,
-      platform: 'Linux x86_64'
-    };
-    const context = vm.createContext({ document, window, navigator, URL, DOMException });
-    vm.runInContext(buildFocusScript(rules, { osPlatform: false }), context);
-    assert.ok(navigator.userAgent.includes('Linux x86_64'));
-    assert.equal(navigator.platform, 'Linux x86_64');
-  }
-
-  // 4. When osPlatform is true with win64 (default), reports Windows 11 x64
+  // 3. When osPlatform is true with win64 (default) and browser is chrome (default)
   {
     const document = Object.create({
       hasFocus() { return true; },
@@ -176,15 +209,40 @@ test('each spoofing feature can be independently deactivated via spoofOptions', 
       platform: 'Linux x86_64'
     };
     const context = vm.createContext({ document, window, navigator, URL, DOMException });
-    vm.runInContext(buildFocusScript(rules, { osPlatform: true, platform: 'win64' }), context);
+    vm.runInContext(buildFocusScript(rules, { osPlatform: true, platform: 'win64', browser: 'chrome' }), context);
     assert.equal(navigator.userAgent, SPOOF_PLATFORMS.win64.ua);
     assert.equal(navigator.platform, 'Win32');
     const uad = await navigator.userAgentData.getHighEntropyValues(['platformVersion']);
     assert.equal(uad.platform, 'Windows');
     assert.equal(uad.platformVersion, '15.0.0');
+    assert.ok(window.chrome);
   }
 
-  // 5. When osPlatform is true with macos64, reports macOS x64
+  // 4. Browser spoofing as Firefox
+  {
+    const document = Object.create({
+      hasFocus() { return true; },
+      location: { href: 'https://example.com' }
+    });
+    const window = {
+      chrome: { fake: true },
+      addEventListener() {},
+      removeEventListener() {}
+    };
+    const navigator = {
+      userAgent: '',
+      appVersion: '',
+      platform: 'Linux x86_64'
+    };
+    const context = vm.createContext({ document, window, navigator, URL, DOMException });
+    vm.runInContext(buildFocusScript(rules, { osPlatform: true, platform: 'win64', browser: 'firefox' }), context);
+    assert.ok(navigator.userAgent.includes('Firefox/135.0'));
+    assert.equal(navigator.vendor, '');
+    assert.equal(navigator.userAgentData, undefined);
+    assert.equal(window.chrome, undefined);
+  }
+
+  // 5. Browser spoofing as Microsoft Edge
   {
     const document = Object.create({
       hasFocus() { return true; },
@@ -200,11 +258,35 @@ test('each spoofing feature can be independently deactivated via spoofOptions', 
       platform: 'Linux x86_64'
     };
     const context = vm.createContext({ document, window, navigator, URL, DOMException });
-    vm.runInContext(buildFocusScript(rules, { osPlatform: true, platform: 'macos64' }), context);
-    assert.equal(navigator.userAgent, SPOOF_PLATFORMS.macos64.ua);
-    assert.equal(navigator.platform, 'MacIntel');
-    const uad = await navigator.userAgentData.getHighEntropyValues(['platformVersion']);
-    assert.equal(uad.platform, 'macOS');
-    assert.equal(uad.platformVersion, '14.5.0');
+    vm.runInContext(buildFocusScript(rules, { osPlatform: true, platform: 'win64', browser: 'edge' }), context);
+    assert.ok(navigator.userAgent.includes('Edg/153.0.0.0'));
+    assert.equal(navigator.vendor, 'Google Inc.');
+    assert.ok(navigator.userAgentData);
+    assert.ok(navigator.userAgentData.brands.some(b => b.brand === 'Microsoft Edge'));
+    assert.ok(window.chrome);
+  }
+
+  // 6. Browser spoofing as Apple Safari
+  {
+    const document = Object.create({
+      hasFocus() { return true; },
+      location: { href: 'https://example.com' }
+    });
+    const window = {
+      chrome: { fake: true },
+      addEventListener() {},
+      removeEventListener() {}
+    };
+    const navigator = {
+      userAgent: '',
+      appVersion: '',
+      platform: 'Linux x86_64'
+    };
+    const context = vm.createContext({ document, window, navigator, URL, DOMException });
+    vm.runInContext(buildFocusScript(rules, { osPlatform: true, platform: 'macos64', browser: 'safari' }), context);
+    assert.ok(navigator.userAgent.includes('Version/18.3 Safari/605.1.15'));
+    assert.equal(navigator.vendor, 'Apple Computer, Inc.');
+    assert.equal(navigator.userAgentData, undefined);
+    assert.equal(window.chrome, undefined);
   }
 });

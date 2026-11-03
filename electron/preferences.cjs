@@ -33,6 +33,8 @@ const DEFAULT_PREFERENCES = Object.freeze({
     screenshare: true,
     osPlatform: true,
     platform: 'win64',
+    browserIdentity: true,
+    browser: 'chrome',
   }),
   proxy: Object.freeze({
     enabled: false, type: 'http', host: '', port: 8080,
@@ -55,12 +57,16 @@ function normalizeTyping(input = DEFAULT_PREFERENCES.typing) {
 }
 
 const SUPPORTED_SPOOF_PLATFORMS = Object.freeze(['win64', 'linux64', 'macos64']);
+const SUPPORTED_SPOOF_BROWSERS = Object.freeze(['chrome', 'edge', 'firefox', 'safari']);
 
 function normalizeSpoof(input = DEFAULT_PREFERENCES.spoof) {
   objectInput(input, 'spoof');
   const platform = typeof input.platform === 'string' && SUPPORTED_SPOOF_PLATFORMS.includes(input.platform)
     ? input.platform
     : 'win64';
+  const browser = typeof input.browser === 'string' && SUPPORTED_SPOOF_BROWSERS.includes(input.browser)
+    ? input.browser
+    : 'chrome';
   return {
     focusVisibility: input.focusVisibility !== false,
     fullscreen: input.fullscreen !== false,
@@ -71,6 +77,8 @@ function normalizeSpoof(input = DEFAULT_PREFERENCES.spoof) {
     screenshare: input.screenshare !== false,
     osPlatform: input.osPlatform !== false,
     platform,
+    browserIdentity: input.browserIdentity !== false,
+    browser,
   };
 }
 
@@ -200,6 +208,6 @@ function publicProxyConfig(config) {
 
 module.exports = {
   SEARCH_ENGINES, DEFAULT_PREFERENCES, normalizeSearch, searchURL, normalizeTyping,
-  normalizeSpoof, SUPPORTED_SPOOF_PLATFORMS,
+  normalizeSpoof, SUPPORTED_SPOOF_PLATFORMS, SUPPORTED_SPOOF_BROWSERS,
   normalizeProxy, publicProxyConfig, normalizeProxyHost,
 };
