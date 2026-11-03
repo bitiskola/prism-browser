@@ -22,7 +22,7 @@ const SEARCH_TEMPLATES = Object.freeze({
 
 const DEFAULT_PREFERENCES = Object.freeze({
   typing: Object.freeze({ speed: 1 }),
-  search: Object.freeze({ engine: 'duckduckgo', customTemplate: '' }),
+  search: Object.freeze({ engine: 'google', customTemplate: '' }),
   proxy: Object.freeze({
     enabled: false, type: 'http', host: '', port: 8080,
     bypass: 'localhost,127.0.0.1,[::1]', username: '', password: '',
@@ -67,7 +67,7 @@ function normalizeTemplate(value, required) {
 
 function normalizeSearch(input = DEFAULT_PREFERENCES.search) {
   objectInput(input, 'search');
-  const engine = input.engine === undefined ? 'duckduckgo' : input.engine;
+  const engine = input.engine === undefined ? 'google' : input.engine;
   if (!SEARCH_ENGINES.some(item => item.id === engine)) throw new Error('Choose a supported search engine.');
   return { engine, customTemplate: normalizeTemplate(input.customTemplate ?? '', engine === 'custom') };
 }

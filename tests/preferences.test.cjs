@@ -8,8 +8,8 @@ const {
   normalizeProxy, publicProxyConfig,
 } = require('../electron/preferences.cjs');
 
-test('search preferences default to DuckDuckGo and list each supported engine once', () => {
-  assert.deepEqual(normalizeSearch(), { engine: 'duckduckgo', customTemplate: '' });
+test('search preferences default to Google and list each supported engine once', () => {
+  assert.deepEqual(normalizeSearch(), { engine: 'google', customTemplate: '' });
   assert.deepEqual(SEARCH_ENGINES.map(item => item.id), ['duckduckgo', 'google', 'bing', 'brave', 'startpage', 'custom']);
   assert.ok(SEARCH_ENGINES.every(item => typeof item.name === 'string'));
   assert.throws(() => normalizeSearch({ engine: 'constructor' }), /supported/);

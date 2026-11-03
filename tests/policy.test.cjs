@@ -79,7 +79,7 @@ test('address bar cannot navigate to executable/local/application schemes or emb
 test('search text is escaped into the search provider query', () => {
   const text = 'cats & dogs #pictures';
   const result = new URL(navigationURL(text));
-  assert.equal(result.origin, 'https://duckduckgo.com');
+  assert.equal(result.origin, 'https://www.google.com');
   assert.equal(result.searchParams.get('q'), text);
   assert.equal(result.hash, '');
   assert.equal([...result.searchParams].length, 1);

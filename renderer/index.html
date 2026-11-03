@@ -18,7 +18,7 @@
     </header>
     <div class="toolbar">
       <div class="navigation"><button class="icon-button" id="back" aria-label="Go back" title="Go back" data-icon="arrow-left"></button><button class="icon-button" id="forward" aria-label="Go forward" title="Go forward" data-icon="arrow-right"></button><button class="icon-button" id="reload" aria-label="Reload" title="Reload (Ctrl+R)" data-icon="reload"></button></div>
-      <form id="address-form" class="address-bar"><span id="address-icon" data-icon="search"></span><input id="address" type="text" aria-label="Search or enter a website address" placeholder="Search or enter a website address" spellcheck="false" autocomplete="off"><span id="address-security" class="address-security">NEW TAB</span><button type="button" id="bookmark-toggle" class="icon-button" title="Bookmark this page" aria-label="Bookmark this page" data-icon="star"></button></form>
+      <form id="address-form" class="address-bar"><span id="address-icon" data-icon="search"></span><input id="address" type="text" aria-label="Search with Google or enter address" placeholder="Search with Google or enter address" spellcheck="false" autocomplete="off"><span id="address-security" class="address-security">NEW TAB</span><button type="button" id="bookmark-toggle" class="icon-button" title="Bookmark this page" aria-label="Bookmark this page" data-icon="star"></button></form>
       <div class="privacy-tools" aria-label="Browsing controls">
         <button id="focus-toggle" class="toolbar-button" aria-pressed="false" aria-label="Toggle spoof mode for this site" title="Spoof mode: best-effort focus, visibility, selection, and keyboard listener controls"><span data-icon="focus"></span><span class="toolbar-label">Spoof mode</span></button>
         <button id="proxy-shortcut" class="toolbar-button" aria-label="Configure proxy" title="Proxy: direct connection · Open settings"><span data-icon="route"></span><span class="toolbar-label">Proxy</span><span id="proxy-indicator" class="tool-indicator" aria-hidden="true"></span></button>
@@ -39,20 +39,151 @@
       <main id="main-surface" class="main-surface">
         <div id="viewport"></div>
         <section id="newtab" class="newtab" aria-label="New tab">
-          <div class="newtab-topline"><span class="workspace-label"><span class="tiny-square"></span>YOUR PERSONAL WORKSPACE</span><span id="preview-label" class="environment-badge"><span class="status-dot"></span>LOCAL PROFILE</span></div>
-          <div class="home-content">
-            <div class="welcome-eyebrow"><span class="status-dot"></span> A dedicated space to explore the web.</div>
-            <h1>Browse. Inspect.<br><span>Stay in control.</span></h1>
-            <p class="welcome-copy">Separate sessions. Site controls. A clearer view of the web.</p>
-            <form id="home-search" class="home-search"><span data-icon="search"></span><input id="home-address" aria-label="Search the web or enter a URL" placeholder="Where would you like to go?" autocomplete="off"><span class="key-hint">Ctrl K</span><button class="home-go" aria-label="Open website or search" data-icon="arrow-right"></button></form>
-            <div class="section-heading"><span>YOUR SHORTCUTS</span><button id="shortcut-add" class="text-button"><span data-icon="plus"></span>Add shortcut</button></div>
-            <div id="shortcuts" class="shortcuts"></div>
-            <div class="home-cards">
-              <button class="feature-card inspect-card" data-open-pane="network"><div class="card-top"><span class="card-icon purple" data-icon="activity"></span><span data-icon="arrow-up-right"></span></div><h2>See beneath the surface</h2><p>Inspect requests, responses, and live connections from the sites you choose.</p><span class="card-link">Open network inspector <span data-icon="arrow-right"></span></span></button>
-              <button class="feature-card" data-open-pane="settings"><div class="card-top"><span class="card-icon mint" data-icon="sliders"></span><span data-icon="arrow-up-right"></span></div><h2>Your sites. Your rules.</h2><p>Choose your search engine, route through a proxy, and control what gets blocked.</p><span class="card-link mint-text">Open browser settings <span data-icon="arrow-right"></span></span></button>
+          <div class="newtab-topline">
+            <span class="workspace-label"><span class="tiny-square"></span>YOUR PERSONAL WORKSPACE</span>
+            <div class="newtab-top-right">
+              <div class="weather-card" id="weather-card">
+                <div class="weather-card-top">
+                  <span class="weather-title">Get your local weather forecast</span>
+                  <button class="icon-button mini-dots" aria-label="Weather options" data-icon="more-horizontal"></button>
+                </div>
+                <div class="weather-actions">
+                  <button class="weather-loc-btn" id="weather-loc-btn">Use location</button>
+                  <button class="weather-choose-link" id="weather-choose-btn">Choose location</button>
+                </div>
+              </div>
+              <span id="preview-label" class="environment-badge"><span class="status-dot"></span>LOCAL PROFILE</span>
             </div>
           </div>
-          <div class="newtab-footer"><span><span data-icon="shield"></span>Separate profile. Persistent sessions.</span><span>Made for curious minds.</span></div>
+
+          <div class="home-content">
+            <div class="firefox-brand-header">
+              <span class="brand-symbol large"></span>
+              <span class="brand-wordmark">Prism</span>
+            </div>
+
+            <form id="home-search" class="home-search">
+              <span class="search-engine-icon" data-icon="search"></span>
+              <input id="home-address" aria-label="Search with Google or enter address" placeholder="Search with Google or enter address" autocomplete="off">
+              <span class="key-hint">Ctrl K</span>
+              <button class="home-go" aria-label="Open website or search" data-icon="arrow-right"></button>
+            </form>
+
+            <div class="shortcuts-container">
+              <div class="section-heading">
+                <span>SHORTCUTS</span>
+                <button id="shortcut-add" class="text-button"><span data-icon="plus"></span>Add shortcut</button>
+              </div>
+              <div id="shortcuts" class="shortcuts-grid"></div>
+            </div>
+
+            <div class="widgets-section">
+              <div class="widgets-header">
+                <button class="widgets-toggle" id="widgets-toggle" aria-expanded="true">
+                  <span class="widgets-title">Widgets</span>
+                  <span class="toggle-icon" data-icon="chevron-down"></span>
+                </button>
+                <button class="icon-button mini-dots" aria-label="Widget options" data-icon="more-horizontal"></button>
+              </div>
+
+              <div class="widgets-grid" id="widgets-grid">
+                <!-- 1. World Clock Widget -->
+                <div class="widget-card clock-widget">
+                  <div class="clock-list" id="world-clock-list">
+                    <div class="clock-row">
+                      <div class="clock-city-info">
+                        <span class="clock-city">Budapest</span>
+                        <span class="clock-zone">GMT+1</span>
+                      </div>
+                      <span class="clock-time" id="clock-budapest">--:-- --</span>
+                    </div>
+                    <div class="clock-row">
+                      <div class="clock-city-info">
+                        <span class="clock-city">Berlin</span>
+                        <span class="clock-zone">GMT+1</span>
+                      </div>
+                      <span class="clock-time" id="clock-berlin">--:-- --</span>
+                    </div>
+                    <div class="clock-row">
+                      <div class="clock-city-info">
+                        <span class="clock-city">Sydney</span>
+                        <span class="clock-zone">GMT+11</span>
+                      </div>
+                      <span class="clock-time" id="clock-sydney">--:-- --</span>
+                    </div>
+                    <div class="clock-row">
+                      <div class="clock-city-info">
+                        <span class="clock-city">New York</span>
+                        <span class="clock-zone">EST</span>
+                      </div>
+                      <span class="clock-time" id="clock-newyork">--:-- --</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 2. Focus Timer Widget -->
+                <div class="widget-card timer-widget">
+                  <div class="timer-dial-container">
+                    <svg class="timer-dial-svg" viewBox="0 0 100 100">
+                      <circle class="timer-dial-bg" cx="50" cy="50" r="42"></circle>
+                      <circle class="timer-dial-progress" id="timer-progress-ring" cx="50" cy="50" r="42" stroke-dasharray="264" stroke-dashoffset="0"></circle>
+                    </svg>
+                    <button class="timer-play-btn" id="timer-play-btn" aria-label="Start timer" data-icon="play"></button>
+                  </div>
+                  <div class="timer-controls">
+                    <button class="timer-stepper" id="timer-step-down" aria-label="Decrease time" data-icon="minus"></button>
+                    <span class="timer-digits" id="timer-digits">25:00</span>
+                    <button class="timer-stepper" id="timer-step-up" aria-label="Increase time" data-icon="plus"></button>
+                  </div>
+                  <div class="timer-modes">
+                    <button class="timer-mode-btn active" id="timer-mode-focus">Focus</button>
+                    <button class="timer-mode-btn" id="timer-mode-break">Break</button>
+                  </div>
+                </div>
+
+                <!-- 3. Checklist Widget -->
+                <div class="widget-card checklist-widget">
+                  <div class="checklist-header">
+                    <span class="checklist-title">Checklist</span>
+                    <button class="checklist-add-btn" id="checklist-add-btn"><span data-icon="plus"></span> Add an item</button>
+                  </div>
+                  <div class="checklist-input-wrap" id="checklist-input-wrap" hidden>
+                    <input class="checklist-input" id="checklist-input" placeholder="What needs to be done?" autocomplete="off">
+                    <button class="checklist-save-btn" id="checklist-save-btn" data-icon="check"></button>
+                  </div>
+                  <div class="checklist-items" id="checklist-items"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="home-cards">
+              <button class="feature-card inspect-card" data-open-pane="network">
+                <div class="card-top">
+                  <span class="card-icon purple" data-icon="activity"></span>
+                  <span data-icon="arrow-up-right"></span>
+                </div>
+                <h2>Network inspector</h2>
+                <p>Inspect requests, responses, and live connections from the sites you choose.</p>
+                <span class="card-link">Open network inspector <span data-icon="arrow-right"></span></span>
+              </button>
+              <button class="feature-card" data-open-pane="settings">
+                <div class="card-top">
+                  <span class="card-icon mint" data-icon="sliders"></span>
+                  <span data-icon="arrow-up-right"></span>
+                </div>
+                <h2>Site controls &amp; settings</h2>
+                <p>Choose your search engine, route through a proxy, and control what gets blocked.</p>
+                <span class="card-link mint-text">Open browser settings <span data-icon="arrow-right"></span></span>
+              </button>
+            </div>
+          </div>
+
+          <button class="floating-customize-btn" id="customize-newtab" title="Customize this page" aria-label="Customize this page" data-icon="edit"></button>
+
+          <div class="newtab-footer">
+            <span><span data-icon="shield"></span>Separate profile. Persistent sessions.</span>
+            <span>Prism · Made for curious minds.</span>
+          </div>
         </section>
         <section id="page-error" class="page-error" hidden></section>
       </main>

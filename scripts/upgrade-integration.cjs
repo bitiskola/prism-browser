@@ -160,7 +160,7 @@ async function main() {
       const state = await invoke('get-state');
       assert.equal(state.adblock.ready, true, state.adblock.error);
       assert.ok(state.adblock.filterCount > 1000);
-      assert.equal(state.search.engine, 'duckduckgo');
+      assert.equal(state.search.engine, 'google');
       return { sandboxed: true, filterCount: state.adblock.filterCount };
     });
 
