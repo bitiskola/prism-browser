@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, WebContentsView, session, ipcMain, dialog, Menu, shell, nativeImage, clipboard, desktopCapturer } = require('electron');
+const { app, BrowserWindow, WebContentsView, session, ipcMain, dialog, Menu, shell, nativeImage, clipboard, desktopCapturer, screen } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -44,7 +44,134 @@ const clipboardTyping = new ClipboardTyping({
     && (wc === win.webContents || (active()?.view.webContents === wc && viewport.visible)))
 });
 const monitor = new NetworkMonitor({ getRules: () => data.rules, emit: (event, value) => { emit(event, value); scheduleState(); } });
+let lockedFullscreenResolution = null;
+let calibrationPromise = null;
+
+async function calibrateFullscreenResolution() {
+  if (calibrationPromise) return calibrationPromise;
+  calibrationPromise = (async () => {
+    if (!win || win.isDestroyed()) return { width: 1920, height: 1080 };
+    const wasFullScreen = win.isFullScreen();
+    if (!wasFullScreen) {
+      win.setFullScreen(true);
+      await new Promise(r => setTimeout(r, 60));
+    }
+    try {
+      const disp = screen.getDisplayMatching(win.getBounds());
+      const bounds = disp?.bounds || win.getBounds();
+      lockedFullscreenResolution = {
+        width: bounds.width || 1920,
+        height: bounds.height || 1080
+      };
+    } catch {
+      lockedFullscreenResolution = { width: 1920, height: 1080 };
+    }
+    if (!wasFullScreen) {
+      win.setFullScreen(false);
+      await new Promise(r => setTimeout(r, 60));
+    }
+    return lockedFullscreenResolution;
+  })().catch(err => {
+    console.warn('Fullscreen calibration error:', err?.message || err);
+    return lockedFullscreenResolution || { width: 1920, height: 1080 };
+  }).finally(() => {
+    calibrationPromise = null;
+  });
+  return calibrationPromise;
+}
+
+function getFullscreenResolution() {
+  if (lockedFullscreenResolution && lockedFullscreenResolution.width > 0 && lockedFullscreenResolution.height > 0) {
+    return lockedFullscreenResolution;
+  }
+  try {
+    if (win && !win.isDestroyed()) {
+      const disp = screen.getDisplayMatching(win.getBounds());
+      if (disp?.bounds?.width && disp?.bounds?.height) {
+        return { width: disp.bounds.width, height: disp.bounds.height };
+      }
+    }
+  } catch {}
+  return { width: 1920, height: 1080 };
+}
+
+let cursorTrackingTimer = null;
+let lastStuckState = false;
+
+function startCursorTracking() {
+  if (cursorTrackingTimer) return;
+  cursorTrackingTimer = setInterval(() => {
+    try {
+      if (!win || win.isDestroyed() || !win.isVisible()) return;
+
+      const optCursor = data.spoof?.screenshareCursor !== false;
+      if (!optCursor) {
+        if (lastStuckState) {
+          lastStuckState = false;
+          for (const tab of tabs.values()) {
+            if (tab.view && !tab.view.webContents.isDestroyed()) {
+              tab.view.webContents.executeJavaScript('try { window.__prism_set_cursor_stuck?.(false); } catch {} void 0;').catch(() => {});
+            }
+          }
+        }
+        return;
+      }
+
+      let targetTab = null;
+      if (sharedTabId && tabs.has(sharedTabId)) {
+        targetTab = tabs.get(sharedTabId);
+      } else if (activeTabId && tabs.has(activeTabId)) {
+        const candidate = tabs.get(activeTabId);
+        if (candidate && candidate.spoofOnLoad && candidate.url !== 'about:blank') {
+          targetTab = candidate;
+        }
+      }
+
+      if (!targetTab || !targetTab.view || targetTab.view.webContents.isDestroyed()) {
+        if (lastStuckState) lastStuckState = false;
+        return;
+      }
+
+      const contentBounds = win.getContentBounds();
+      const viewBounds = targetTab.view.getBounds();
+      const viewScreenRect = {
+        x: contentBounds.x + viewBounds.x,
+        y: contentBounds.y + viewBounds.y,
+        width: viewBounds.width,
+        height: viewBounds.height
+      };
+
+      const cursorPoint = screen.getCursorScreenPoint();
+      const isInside = (
+        cursorPoint.x >= viewScreenRect.x &&
+        cursorPoint.x < viewScreenRect.x + viewScreenRect.width &&
+        cursorPoint.y >= viewScreenRect.y &&
+        cursorPoint.y < viewScreenRect.y + viewScreenRect.height &&
+        win.isFocused()
+      );
+
+      const isOutside = !isInside;
+      if (isOutside !== lastStuckState) {
+        lastStuckState = isOutside;
+        const relX = cursorPoint.x - viewScreenRect.x;
+        const relY = cursorPoint.y - viewScreenRect.y;
+        targetTab.view.webContents.executeJavaScript(
+          'try { window.__prism_set_cursor_stuck?.(' + isOutside + ', ' + Math.round(relX) + ', ' + Math.round(relY) + '); } catch {} void 0;'
+        ).catch(() => {});
+      }
+    } catch {}
+  }, 35);
+}
+
+function stopCursorTracking() {
+  if (cursorTrackingTimer) {
+    clearInterval(cursorTrackingTimer);
+    cursorTrackingTimer = null;
+  }
+}
+
 const focus = new FocusController({ getRules: () => data.rules,
+  getTargetResolution: () => getFullscreenResolution(),
   getSpoofOptions: () => data.spoof,
   getFrameSessions: id => monitor.getFrameSessions(id),
   onError: (error, id) => { const tab = tabs.get(id); if (tab) { tab.focusError = error.message; scheduleState(); } },
@@ -198,6 +325,9 @@ async function refreshPageTools(tab) {
   const wc = tab.view.webContents;
   if (wc.isDestroyed()) return;
   tab.spoofOnLoad = checkTabSpoof(tab.url);
+  if (tab.spoofOnLoad && data.spoof?.fullscreen !== false) {
+    await calibrateFullscreenResolution();
+  }
   wc.setUserAgent(getTabUserAgent(tab.spoofOnLoad));
   if (tab.devtoolsRequested || wc.isDevToolsOpened()) {
     tab.focusStatus = { status: 'suspended', error: 'Close Developer Tools to resume spoof mode.' };
@@ -336,6 +466,9 @@ async function navigate(tab, value) {
   if (previousOrigin !== nextOrigin || !nextOrigin) tab.favicon = '';
   tab.url = url; tab.error = ''; tab.title = url === 'about:blank' ? 'New tab' : new URL(url).hostname;
   tab.spoofOnLoad = checkTabSpoof(url);
+  if (tab.spoofOnLoad && data.spoof?.fullscreen !== false) {
+    await calibrateFullscreenResolution();
+  }
   tab.view.webContents.setUserAgent(getTabUserAgent(tab.spoofOnLoad));
   layout(); sendState();
   try { await tab.view.webContents.loadURL(url); } catch (error) { if (error.code !== 'ERR_ABORTED') { tab.error ||= error.message; layout(); sendState(); } }
@@ -718,6 +851,10 @@ async function action(name, payload = {}) {
     case 'spoof-save': {
       data.spoof = normalizeSpoof(payload.spoof);
       saveState();
+      const hasSpoof = [...tabs.values()].some(t => checkTabSpoof(t.url));
+      if (hasSpoof && data.spoof?.fullscreen !== false) {
+        await calibrateFullscreenResolution();
+      }
       const updates = [];
       for (const t of tabs.values()) {
         const isSpoofed = checkTabSpoof(t.url);
@@ -788,6 +925,10 @@ async function action(name, payload = {}) {
     case 'history-clear': data.history = []; scheduleSave(); break;
     case 'rules-save': {
       data.rules = normalizeRules(payload.rules); saveState();
+      const hasSpoof = [...tabs.values()].some(t => checkTabSpoof(t.url));
+      if (hasSpoof && data.spoof?.fullscreen !== false) {
+        await calibrateFullscreenResolution();
+      }
       const updates = new Map();
       for (const candidate of tabs.values()) {
         candidate.focusStatus = { status: 'applying', error: '' };
@@ -888,6 +1029,7 @@ async function createWindow() {
   win.on('blur', () => clipboardTyping.stop());
   win.on('close', () => clipboardTyping.stop());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  startCursorTracking();
   win.on('resize', layout);
   win.on('enter-full-screen', () => {
     const active = tabs.get(activeTabId);
@@ -924,7 +1066,7 @@ async function createWindow() {
     }
   });
   win.on('close', () => { saveState(); closing = true; clearTimeout(saveTimer); });
-  win.on('closed', () => { if (pendingScreenshare) { pendingScreenshare.callback(null); pendingScreenshare = null; } sharedTabId = null; closeFaviconDecoder(); for (const tab of tabs.values()) { monitor.detach(tab.id); adblock?.detach(tab.view.webContents.id); void focus.detach(tab.id); if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close(); } tabs.clear(); win = null; });
+  win.on('closed', () => { if (pendingScreenshare) { pendingScreenshare.callback(null); pendingScreenshare = null; } sharedTabId = null; closeFaviconDecoder(); for (const tab of tabs.values()) { monitor.detach(tab.id); adblock?.detach(tab.view.webContents.id); void focus.detach(tab.id); if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close(); } stopCursorTracking(); tabs.clear(); win = null; });
   await win.loadFile(shellFile);
   const restore = !connectionError && data.tabs.length ? [...data.tabs] : ['about:blank'];
   const selected = data.activeIndex;

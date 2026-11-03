@@ -324,6 +324,7 @@ test('FocusController setEmulation passes correct userAgent and userAgentMetadat
   assert.equal(metricsOverride.params.height, 1080);
   assert.equal(metricsOverride.params.screenWidth, 1920);
   assert.equal(metricsOverride.params.screenHeight, 1080);
+  assert.equal(metricsOverride.params.fitWindow, true);
   let override = sentCommands.find(c => c.method === 'Emulation.setUserAgentOverride');
   assert.ok(override, 'setUserAgentOverride command sent');
   assert.ok(override.params.userAgent.includes('Edg/153.0.0.0'), 'UA contains Edge 153');
@@ -450,11 +451,7 @@ test('fullscreen lock embeds 1920x1080 true fullscreen resolution spoofing and s
   assert.equal(window.screenX, 0);
   assert.equal(window.screenY, 0);
 
-  // 4. documentElement and body clientWidth/clientHeight and visualViewport report 1920x1080
-  assert.equal(document.documentElement.clientWidth, 1920);
-  assert.equal(document.documentElement.clientHeight, 1080);
-  assert.equal(document.body.clientWidth, 1920);
-  assert.equal(document.body.clientHeight, 1080);
+  // 4. Element clientWidth/clientHeight are not overridden (preserving full-page scrollability), and visualViewport reports 1920x1080
   assert.equal(window.visualViewport.width, 1920);
   assert.equal(window.visualViewport.height, 1080);
   assert.equal(screen.orientation.type, 'landscape-primary');
@@ -569,6 +566,13 @@ test('screenshare cursor containment parks pointer ~1cm from exit side during ta
   }
   assert.equal(pointerEl.style.display, 'block');
   assert.equal(pointerEl.style.transform, 'translate3d(500px, 38px, 0)');
+
+  // Direct trigger from OS cursor tracking
+  window.__prism_set_cursor_stuck(true, 500, 1070);
+  assert.equal(pointerEl.style.display, 'block');
+  assert.equal(pointerEl.style.transform, 'translate3d(500px, 1042px, 0)');
+  window.__prism_set_cursor_stuck(false);
+  assert.equal(pointerEl.style.display, 'none');
 
   // Disabling spoof mode cleans up host from DOM
   vm.runInContext(buildFocusScript([]), context);

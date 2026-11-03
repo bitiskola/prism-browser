@@ -315,7 +315,9 @@ function patchDocument(rules, spoofOptions = {}) {
       cursorHost = null;
       cursorEl = null;
     }
-    try { delete window.__prism_report_display_surface; } catch {} 
+    try { delete window.__prism_report_display_surface; } catch {}
+    try { delete window.__prism_set_cursor_stuck; } catch {}
+    try { delete window.__prism_tab_cast_active; } catch {} 
     try { delete document[key]; } catch { /* Best effort if a page freezes the document. */ }
   };
   try { Object.defineProperty(document, key, { value: { restore, version: 2, signature: currentSignature }, configurable: true }); }
@@ -465,13 +467,16 @@ function patchDocument(rules, spoofOptions = {}) {
     }
 
     // Fullscreen resolution spoofing (embedded in optFullscreen):
-    // Reports target device real fullscreen resolution (1920x1080 Full HD, 24-bit, 1:1 dpr)
+    // Reports target device real fullscreen resolution (calibrated or 1920x1080, 24-bit, 1:1 dpr)
     // and keeps it locked even when toggling window fullscreen with Ctrl+F / controls.
+    const targetWidth = (spoofOptions.targetResolution && spoofOptions.targetResolution.width) || 1920;
+    const targetHeight = (spoofOptions.targetResolution && spoofOptions.targetResolution.height) || 1080;
+
     const fsResolution = {
-      width: 1920,
-      height: 1080,
-      availWidth: 1920,
-      availHeight: 1080,
+      width: targetWidth,
+      height: targetHeight,
+      availWidth: targetWidth,
+      availHeight: targetHeight,
       availLeft: 0,
       availTop: 0,
       colorDepth: 24,
@@ -499,10 +504,10 @@ function patchDocument(rules, spoofOptions = {}) {
     }
 
     const fsWindowDims = {
-      innerWidth: 1920,
-      innerHeight: 1080,
-      outerWidth: 1920,
-      outerHeight: 1080,
+      innerWidth: targetWidth,
+      innerHeight: targetHeight,
+      outerWidth: targetWidth,
+      outerHeight: targetHeight,
       screenX: 0,
       screenY: 0,
       screenLeft: 0,
@@ -529,77 +534,11 @@ function patchDocument(rules, spoofOptions = {}) {
       }
     }
 
-    if (typeof Element !== 'undefined' && Element.prototype) {
-      let owner = Element.prototype;
-      while (owner && !Object.hasOwn(owner, 'clientWidth')) owner = Object.getPrototypeOf(owner);
-      if (!owner) owner = Element.prototype;
-      const origClientWidth = Object.getOwnPropertyDescriptor(owner, 'clientWidth');
-      if (origClientWidth?.get) {
-        define('clientWidth', {
-          ...origClientWidth,
-          get: function () {
-            if (typeof document !== 'undefined' && (this === document.documentElement || this === document.body)) {
-              return 1920;
-            }
-            return Reflect.apply(origClientWidth.get, this, []);
-          }
-        }, owner);
-      } else {
-        define('clientWidth', {
-          get: function () {
-            if (typeof document !== 'undefined' && (this === document.documentElement || this === document.body)) {
-              return 1920;
-            }
-            return origClientWidth ? origClientWidth.value : 1920;
-          },
-          configurable: true
-        }, owner);
-      }
-
-      const origClientHeight = Object.getOwnPropertyDescriptor(owner, 'clientHeight');
-      if (origClientHeight?.get) {
-        define('clientHeight', {
-          ...origClientHeight,
-          get: function () {
-            if (typeof document !== 'undefined' && (this === document.documentElement || this === document.body)) {
-              return 1080;
-            }
-            return Reflect.apply(origClientHeight.get, this, []);
-          }
-        }, owner);
-      } else {
-        define('clientHeight', {
-          get: function () {
-            if (typeof document !== 'undefined' && (this === document.documentElement || this === document.body)) {
-              return 1080;
-            }
-            return origClientHeight ? origClientHeight.value : 1080;
-          },
-          configurable: true
-        }, owner);
-      }
-    }
-
-    if (typeof document !== 'undefined') {
-      if (document.documentElement) {
-        define('clientWidth', { get: () => 1920, configurable: true }, document.documentElement);
-        define('clientHeight', { get: () => 1080, configurable: true }, document.documentElement);
-      }
-      if (document.body) {
-        define('clientWidth', { get: () => 1920, configurable: true }, document.body);
-        define('clientHeight', { get: () => 1080, configurable: true }, document.body);
-      }
-    }
-
     if (typeof VisualViewport !== 'undefined' && VisualViewport.prototype) {
       const vvProps = {
-        width: 1920,
-        height: 1080,
-        scale: 1,
-        pageLeft: 0,
-        pageTop: 0,
-        offsetLeft: 0,
-        offsetTop: 0
+        width: targetWidth,
+        height: targetHeight,
+        scale: 1
       };
       for (const [prop, val] of Object.entries(vvProps)) {
         let owner = VisualViewport.prototype;
@@ -616,13 +555,9 @@ function patchDocument(rules, spoofOptions = {}) {
 
     if (typeof window !== 'undefined' && window.visualViewport) {
       for (const [prop, val] of Object.entries({
-        width: 1920,
-        height: 1080,
-        scale: 1,
-        pageLeft: 0,
-        pageTop: 0,
-        offsetLeft: 0,
-        offsetTop: 0
+        width: targetWidth,
+        height: targetHeight,
+        scale: 1
       })) {
         define(prop, { get: () => val, configurable: true }, window.visualViewport);
       }
@@ -664,7 +599,7 @@ function patchDocument(rules, spoofOptions = {}) {
                 }
               });
             }
-            if (q.includes("width: 1920px") || q.includes("min-width: 1920px") || q.includes("height: 1080px") || q.includes("min-height: 1080px")) {
+            if (q.includes(`width: ${targetWidth}px`) || q.includes(`min-width: ${targetWidth}px`) || q.includes(`height: ${targetHeight}px`) || q.includes(`min-height: ${targetHeight}px`) || q.includes("width: 1920px") || q.includes("height: 1080px")) {
               return new Proxy(m, {
                 get(target, prop) {
                   if (prop === "matches") return true;
@@ -993,10 +928,13 @@ function patchDocument(rules, spoofOptions = {}) {
 
   // Screenshare cursor containment: when casting tab, keep cursor visible parked ~1cm from exit boundary
   let onCastChange;
+  let showStuckCursor;
   if (optScreenshareCursor) {
     const MARGIN_CM = 38; // ~1cm at standard 96 CSS DPI
-    let lastX = 960;
-    let lastY = 540;
+    const targetW = (spoofOptions.targetResolution && spoofOptions.targetResolution.width) || 1920;
+    const targetH = (spoofOptions.targetResolution && spoofOptions.targetResolution.height) || 1080;
+    let lastX = Math.round(targetW / 2);
+    let lastY = Math.round(targetH / 2);
     if (typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth > 0) {
       lastX = Math.round(window.innerWidth / 2);
       lastY = Math.round(window.innerHeight / 2);
@@ -1008,9 +946,11 @@ function patchDocument(rules, spoofOptions = {}) {
       return optScreenshareCursor !== false;
     };
 
+    let pointerEl = null;
+
     const ensureOverlayElement = () => {
       if (!isTopLevel) return null;
-      if (cursorEl && cursorHost && (cursorHost.isConnected || cursorHost.parentNode)) return cursorEl;
+      if (pointerEl && cursorHost && (cursorHost.isConnected || cursorHost.parentNode)) return pointerEl;
       if (typeof document === 'undefined') return null;
       const parent = document.documentElement || document.body;
       if (!parent) return null;
@@ -1019,54 +959,35 @@ function patchDocument(rules, spoofOptions = {}) {
         cursorHost = document.createElement('div');
         cursorHost.id = '__prism_cast_cursor_host__';
         cursorHost.setAttribute('aria-hidden', 'true');
-        cursorHost.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;pointer-events:none;overflow:visible;';
-
-        const shadow = (typeof cursorHost.attachShadow === 'function')
-          ? cursorHost.attachShadow({ mode: 'open' })
-          : cursorHost;
-
-        const style = document.createElement('style');
-        style.textContent = `
-          .prism-cast-pointer {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 24px;
-            height: 24px;
-            margin-left: -4px;
-            margin-top: -2px;
-            pointer-events: none !important;
-            user-select: none !important;
-            z-index: 2147483647 !important;
-            filter: drop-shadow(1px 2px 2px rgba(0,0,0,0.45));
-            transition: none !important;
-            display: none;
-          }
-        `;
+        cursorHost.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;pointer-events:none !important;overflow:visible;';
 
         const pointer = document.createElement('div');
+        pointer.id = '__prism_cast_pointer__';
         pointer.className = 'prism-cast-pointer';
+        pointer.style.cssText = 'position:fixed;top:0;left:0;width:24px;height:24px;margin-left:-4px;margin-top:-2px;pointer-events:none !important;user-select:none !important;z-index:2147483647 !important;filter:drop-shadow(1px 2px 2px rgba(0,0,0,0.5));display:none;';
         pointer.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 2 L4 20 L8.5 15.5 L12.5 23 L15.5 21.5 L11.5 14 L17.5 14 Z" fill="#FFFFFF" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>';
 
-        shadow.appendChild(style);
-        shadow.appendChild(pointer);
+        cursorHost.appendChild(pointer);
         parent.appendChild(cursorHost);
         if (!cursorHost.parentNode) cursorHost.parentNode = parent;
+        pointerEl = pointer;
         cursorEl = pointer;
       }
-      return cursorEl;
+      return pointerEl;
     };
 
     const hideOverlay = () => {
-      if (cursorEl) {
+      if (pointerEl) {
+        pointerEl.style.display = 'none';
+      } else if (cursorEl) {
         cursorEl.style.display = 'none';
       }
     };
 
-    const showStuckCursor = () => {
+    showStuckCursor = () => {
       if (!isTabCasting() || !isTopLevel) return;
-      const W = (typeof window !== 'undefined' && window.innerWidth) || 1920;
-      const H = (typeof window !== 'undefined' && window.innerHeight) || 1080;
+      const W = (typeof window !== 'undefined' && window.innerWidth) || targetW;
+      const H = (typeof window !== 'undefined' && window.innerHeight) || targetH;
 
       const dLeft = Math.max(0, lastX);
       const dRight = Math.max(0, W - lastX);
@@ -1093,7 +1014,7 @@ function patchDocument(rules, spoofOptions = {}) {
 
       const el = ensureOverlayElement();
       if (el) {
-        el.style.transform = `translate3d(${Math.round(parkX)}px, ${Math.round(parkY)}px, 0)`;
+        el.style.transform = 'translate3d(' + Math.round(parkX) + 'px, ' + Math.round(parkY) + 'px, 0)';
         el.style.display = 'block';
       }
     };
@@ -1116,6 +1037,20 @@ function patchDocument(rules, spoofOptions = {}) {
     onCastChange = () => {
       if (!isTabCasting()) hideOverlay();
     };
+
+    if (typeof window !== 'undefined') {
+      window.__prism_set_cursor_stuck = function(stuck, relX, relY) {
+        if (!stuck) {
+          hideOverlay();
+          return;
+        }
+        if (typeof relX === 'number' && typeof relY === 'number') {
+          lastX = relX;
+          lastY = relY;
+        }
+        showStuckCursor();
+      };
+    }
 
     if (typeof window !== 'undefined' && window.addEventListener) {
       window.addEventListener('mousemove', onMove, true);
@@ -1177,7 +1112,12 @@ function patchDocument(rules, spoofOptions = {}) {
     }
 
     const stopBoundary = event => {
-      if (event.isTrusted) event.stopImmediatePropagation();
+      if (event.isTrusted) {
+        if (optScreenshareCursor && (event.type === 'mouseleave' || event.type === 'mouseout')) {
+          try { if (typeof showStuckCursor === 'function') showStuckCursor(); } catch {}
+        }
+        event.stopImmediatePropagation();
+      }
     };
     for (const name of ['selectionchange', 'selectstart', 'select',
       'mouseenter', 'mouseleave', 'mouseover', 'mouseout', 'pointerenter', 'pointerleave', 'pointerover', 'pointerout']) {
@@ -1352,9 +1292,10 @@ function buildFocusScript(rules, spoofOptions = {}) {
 }
 
 class FocusController {
-  constructor({ getRules, getSpoofOptions = () => ({}), getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
+  constructor({ getRules, getSpoofOptions = () => ({}), getTargetResolution = () => ({ width: 1920, height: 1080 }), getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
     this.getRules = getRules;
     this.getSpoofOptions = getSpoofOptions;
+    this.getTargetResolution = getTargetResolution;
     this.getFrameSessions = getFrameSessions;
     this.onError = onError;
     this.onStatus = onStatus;
@@ -1523,13 +1464,15 @@ class FocusController {
           uaParams = { userAgent: defaultUA };
         }
         const optFullscreen = spoofOptions.fullscreen !== false;
+        const targetRes = typeof this.getTargetResolution === 'function' ? this.getTargetResolution() : { width: 1920, height: 1080 };
         const deviceMetricsParams = {
-          width: 1920,
-          height: 1080,
+          width: targetRes.width,
+          height: targetRes.height,
           deviceScaleFactor: 1,
           mobile: false,
-          screenWidth: 1920,
-          screenHeight: 1080
+          screenWidth: targetRes.width,
+          screenHeight: targetRes.height,
+          fitWindow: true
         };
 
         const cdpCalls = [
@@ -1589,7 +1532,10 @@ class FocusController {
         this.publish(state, 'applying');
         if (!state.webContents.debugger.isAttached()) throw new Error('Page tools are disconnected. Turn spoof mode on again to reconnect.');
         const rules = this.getRules();
-        const spoofOptions = typeof this.getSpoofOptions === 'function' ? this.getSpoofOptions() : {};
+        const rawSpoofOptions = typeof this.getSpoofOptions === 'function' ? this.getSpoofOptions() : {};
+        const hasSpoof = Object.keys(rawSpoofOptions).length > 0;
+        const targetRes = typeof this.getTargetResolution === 'function' ? this.getTargetResolution() : { width: 1920, height: 1080 };
+        const spoofOptions = hasSpoof ? { ...rawSpoofOptions, targetResolution: targetRes } : rawSpoofOptions;
         const normalized = focusRules(rules);
         const source = buildFocusScript(rules, spoofOptions);
         const signature = JSON.stringify({ rules: normalized, spoof: spoofOptions });
