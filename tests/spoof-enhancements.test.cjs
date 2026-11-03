@@ -318,6 +318,12 @@ test('FocusController setEmulation passes correct userAgent and userAgentMetadat
 
   // 1. Edge on win64
   await controller.setEmulation(fakeState, true);
+  let metricsOverride = sentCommands.find(c => c.method === 'Emulation.setDeviceMetricsOverride');
+  assert.ok(metricsOverride, 'setDeviceMetricsOverride sent');
+  assert.equal(metricsOverride.params.width, 1920);
+  assert.equal(metricsOverride.params.height, 1080);
+  assert.equal(metricsOverride.params.screenWidth, 1920);
+  assert.equal(metricsOverride.params.screenHeight, 1080);
   let override = sentCommands.find(c => c.method === 'Emulation.setUserAgentOverride');
   assert.ok(override, 'setUserAgentOverride command sent');
   assert.ok(override.params.userAgent.includes('Edg/153.0.0.0'), 'UA contains Edge 153');
@@ -343,9 +349,11 @@ test('FocusController setEmulation passes correct userAgent and userAgentMetadat
   assert.ok(override.params.userAgent.includes('Macintosh; Intel Mac OS X 10_15_7'), 'UA contains Mac token');
   assert.equal(override.params.userAgentMetadata, undefined, 'no userAgentMetadata for Safari');
 
-  // 4. Disabled emulation restores defaultUA
+  // 4. Disabled emulation restores defaultUA and clears device metrics
   sentCommands.length = 0;
   await controller.setEmulation(fakeState, false);
+  let clearMetrics = sentCommands.find(c => c.method === 'Emulation.clearDeviceMetricsOverride');
+  assert.ok(clearMetrics, 'clearDeviceMetricsOverride sent');
   override = sentCommands.find(c => c.method === 'Emulation.setUserAgentOverride');
   assert.equal(override.params.userAgent, 'Original/1.0', 'restores default userAgent');
   assert.equal(override.params.userAgentMetadata, undefined);
@@ -382,11 +390,18 @@ test('fullscreen lock embeds 1920x1080 true fullscreen resolution spoofing and s
     availLeft: 0,
     availTop: 0,
     colorDepth: 24,
-    pixelDepth: 24
+    pixelDepth: 24,
+    orientation: { type: 'portrait-primary', angle: 90 }
   };
+  const visualViewport = { width: 1024, height: 700, scale: 1 };
+  const VisualViewport = function() {};
+  VisualViewport.prototype = Object.getPrototypeOf(visualViewport);
+  const ScreenOrientation = function() {};
+  ScreenOrientation.prototype = Object.getPrototypeOf(screen.orientation);
 
   const window = {
     screen,
+    visualViewport,
     innerWidth: 1024,
     innerHeight: 700,
     outerWidth: 1024,
@@ -410,7 +425,7 @@ test('fullscreen lock embeds 1920x1080 true fullscreen resolution spoofing and s
   const Screen = function() {};
   Screen.prototype = Object.getPrototypeOf(screen);
 
-  const context = vm.createContext({ document, window, screen, Screen, Element, Document, URL, DOMException });
+  const context = vm.createContext({ document, window, screen, Screen, visualViewport, VisualViewport, ScreenOrientation, Element, Document, URL, DOMException });
 
   // 1. Before spoof mode, resolution is native/custom
   assert.equal(window.innerWidth, 1024);
@@ -435,11 +450,15 @@ test('fullscreen lock embeds 1920x1080 true fullscreen resolution spoofing and s
   assert.equal(window.screenX, 0);
   assert.equal(window.screenY, 0);
 
-  // 4. documentElement and body clientWidth/clientHeight report 1920x1080
+  // 4. documentElement and body clientWidth/clientHeight and visualViewport report 1920x1080
   assert.equal(document.documentElement.clientWidth, 1920);
   assert.equal(document.documentElement.clientHeight, 1080);
   assert.equal(document.body.clientWidth, 1920);
   assert.equal(document.body.clientHeight, 1080);
+  assert.equal(window.visualViewport.width, 1920);
+  assert.equal(window.visualViewport.height, 1080);
+  assert.equal(screen.orientation.type, 'landscape-primary');
+  assert.equal(screen.orientation.angle, 0);
 
   // 5. matchMedia matches fullscreen and 1920x1080 queries
   assert.equal(window.matchMedia('(display-mode: fullscreen)').matches, true);
@@ -502,7 +521,6 @@ test('screenshare cursor containment parks pointer ~1cm from exit side during ta
   const window = {
     innerWidth: 1920,
     innerHeight: 1080,
-    __prism_tab_cast_active: true,
     addEventListener(type, fn) {
       const set = winListeners.get(type) || new Set();
       set.add(fn);

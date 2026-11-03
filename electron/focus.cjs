@@ -591,6 +591,52 @@ function patchDocument(rules, spoofOptions = {}) {
       }
     }
 
+    if (typeof VisualViewport !== 'undefined' && VisualViewport.prototype) {
+      const vvProps = {
+        width: 1920,
+        height: 1080,
+        scale: 1,
+        pageLeft: 0,
+        pageTop: 0,
+        offsetLeft: 0,
+        offsetTop: 0
+      };
+      for (const [prop, val] of Object.entries(vvProps)) {
+        let owner = VisualViewport.prototype;
+        while (owner && !Object.hasOwn(owner, prop)) owner = Object.getPrototypeOf(owner);
+        if (!owner) owner = VisualViewport.prototype;
+        const original = Object.getOwnPropertyDescriptor(owner, prop);
+        if (original?.get) {
+          define(prop, { ...original, get: function () { return val; } }, owner);
+        } else {
+          define(prop, { get: () => val, configurable: true }, owner);
+        }
+      }
+    }
+
+    if (typeof window !== 'undefined' && window.visualViewport) {
+      for (const [prop, val] of Object.entries({
+        width: 1920,
+        height: 1080,
+        scale: 1,
+        pageLeft: 0,
+        pageTop: 0,
+        offsetLeft: 0,
+        offsetTop: 0
+      })) {
+        define(prop, { get: () => val, configurable: true }, window.visualViewport);
+      }
+    }
+
+    if (typeof ScreenOrientation !== 'undefined' && ScreenOrientation.prototype) {
+      define('type', { get: () => 'landscape-primary', configurable: true }, ScreenOrientation.prototype);
+      define('angle', { get: () => 0, configurable: true }, ScreenOrientation.prototype);
+    }
+    if (typeof window !== 'undefined' && window.screen?.orientation) {
+      define('type', { get: () => 'landscape-primary', configurable: true }, window.screen.orientation);
+      define('angle', { get: () => 0, configurable: true }, window.screen.orientation);
+    }
+
     const stopResizeEvent = e => {
       if (e && e.isTrusted && typeof e.stopImmediatePropagation === 'function') {
         e.stopImmediatePropagation();
@@ -956,58 +1002,58 @@ function patchDocument(rules, spoofOptions = {}) {
       lastY = Math.round(window.innerHeight / 2);
     }
 
+    const isTopLevel = typeof window === 'undefined' || !window.top || window.top === window;
+
     const isTabCasting = () => {
-      if (typeof window === 'undefined') return false;
-      return Boolean(
-        window.__prism_tab_cast_active ||
-        window.__prism_force_cursor_containment ||
-        activeCastTracksCount > 0
-      );
+      return optScreenshareCursor !== false;
     };
 
     const ensureOverlayElement = () => {
-      if (cursorEl) return cursorEl;
+      if (!isTopLevel) return null;
+      if (cursorEl && cursorHost && (cursorHost.isConnected || cursorHost.parentNode)) return cursorEl;
       if (typeof document === 'undefined') return null;
-      const parent = document.body || document.documentElement;
+      const parent = document.documentElement || document.body;
       if (!parent) return null;
 
-      cursorHost = document.createElement('div');
-      cursorHost.id = '__prism_cast_cursor_host__';
-      cursorHost.setAttribute('aria-hidden', 'true');
-      cursorHost.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;pointer-events:none;overflow:visible;';
+      if (!cursorHost || (!cursorHost.isConnected && !cursorHost.parentNode)) {
+        cursorHost = document.createElement('div');
+        cursorHost.id = '__prism_cast_cursor_host__';
+        cursorHost.setAttribute('aria-hidden', 'true');
+        cursorHost.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;pointer-events:none;overflow:visible;';
 
-      const shadow = (typeof cursorHost.attachShadow === 'function')
-        ? cursorHost.attachShadow({ mode: 'open' })
-        : cursorHost;
+        const shadow = (typeof cursorHost.attachShadow === 'function')
+          ? cursorHost.attachShadow({ mode: 'open' })
+          : cursorHost;
 
-      const style = document.createElement('style');
-      style.textContent = `
-        .prism-cast-pointer {
-          position: fixed;
-          top: 0;
-          left: 0;
-          width: 24px;
-          height: 24px;
-          margin-left: -4px;
-          margin-top: -2px;
-          pointer-events: none !important;
-          user-select: none !important;
-          z-index: 2147483647 !important;
-          filter: drop-shadow(1px 2px 2px rgba(0,0,0,0.45));
-          transition: none !important;
-          display: none;
-        }
-      `;
+        const style = document.createElement('style');
+        style.textContent = `
+          .prism-cast-pointer {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 24px;
+            height: 24px;
+            margin-left: -4px;
+            margin-top: -2px;
+            pointer-events: none !important;
+            user-select: none !important;
+            z-index: 2147483647 !important;
+            filter: drop-shadow(1px 2px 2px rgba(0,0,0,0.45));
+            transition: none !important;
+            display: none;
+          }
+        `;
 
-      const pointer = document.createElement('div');
-      pointer.className = 'prism-cast-pointer';
-      pointer.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 2 L4 20 L8.5 15.5 L12.5 23 L15.5 21.5 L11.5 14 L17.5 14 Z" fill="#FFFFFF" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+        const pointer = document.createElement('div');
+        pointer.className = 'prism-cast-pointer';
+        pointer.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 2 L4 20 L8.5 15.5 L12.5 23 L15.5 21.5 L11.5 14 L17.5 14 Z" fill="#FFFFFF" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>';
 
-      shadow.appendChild(style);
-      shadow.appendChild(pointer);
-      parent.appendChild(cursorHost);
-      if (!cursorHost.parentNode) cursorHost.parentNode = parent;
-      cursorEl = pointer;
+        shadow.appendChild(style);
+        shadow.appendChild(pointer);
+        parent.appendChild(cursorHost);
+        if (!cursorHost.parentNode) cursorHost.parentNode = parent;
+        cursorEl = pointer;
+      }
       return cursorEl;
     };
 
@@ -1018,7 +1064,7 @@ function patchDocument(rules, spoofOptions = {}) {
     };
 
     const showStuckCursor = () => {
-      if (!isTabCasting()) return;
+      if (!isTabCasting() || !isTopLevel) return;
       const W = (typeof window !== 'undefined' && window.innerWidth) || 1920;
       const H = (typeof window !== 'undefined' && window.innerHeight) || 1080;
 
@@ -1476,20 +1522,51 @@ class FocusController {
         } else {
           uaParams = { userAgent: defaultUA };
         }
-        const results = await Promise.allSettled([
+        const optFullscreen = spoofOptions.fullscreen !== false;
+        const deviceMetricsParams = {
+          width: 1920,
+          height: 1080,
+          deviceScaleFactor: 1,
+          mobile: false,
+          screenWidth: 1920,
+          screenHeight: 1080
+        };
+
+        const cdpCalls = [
           state.webContents.debugger.sendCommand('Emulation.setUserAgentOverride', uaParams),
-          state.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled }),
-          ...[...state.frameSessions].flatMap(([id, session]) => [
-            (async () => {
-              try { await state.webContents.debugger.sendCommand('Emulation.setUserAgentOverride', uaParams, id); }
+        ];
+
+        if (enabled && optFullscreen) {
+          cdpCalls.push(state.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', deviceMetricsParams));
+        } else {
+          cdpCalls.push(state.webContents.debugger.sendCommand('Emulation.clearDeviceMetricsOverride').catch(() => {}));
+        }
+
+        cdpCalls.push(state.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled }));
+
+        for (const [id, session] of state.frameSessions) {
+          cdpCalls.push((async () => {
+            try { await state.webContents.debugger.sendCommand('Emulation.setUserAgentOverride', uaParams, id); }
+            catch (error) { if (state.frameSessions.get(id) === session) throw error; }
+          })());
+          if (enabled && optFullscreen) {
+            cdpCalls.push((async () => {
+              try { await state.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', deviceMetricsParams, id); }
               catch (error) { if (state.frameSessions.get(id) === session) throw error; }
-            })(),
-            (async () => {
-              try { await state.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled }, id); }
+            })());
+          } else {
+            cdpCalls.push((async () => {
+              try { await state.webContents.debugger.sendCommand('Emulation.clearDeviceMetricsOverride', {}, id); }
               catch (error) { if (state.frameSessions.get(id) === session) throw error; }
-            })(),
-          ]),
-        ]);
+            })());
+          }
+          cdpCalls.push((async () => {
+            try { await state.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled }, id); }
+            catch (error) { if (state.frameSessions.get(id) === session) throw error; }
+          })());
+        }
+
+        const results = await Promise.allSettled(cdpCalls);
         const failed = results.find(result => result.status === 'rejected');
         if (failed) throw failed.reason;
         return '';
@@ -1555,7 +1632,8 @@ class FocusController {
         }
         const currentFrames = this.frames(state);
         const allSelected = currentFrames.length > 0 && currentFrames.every(frame => this.frameSelected(state, frame, normalized));
-        const warning = await this.setEmulation(state, allSelected);
+        const mainSelected = selected(state.webContents.mainFrame.url, normalized);
+        const warning = await this.setEmulation(state, mainSelected || allSelected);
         if (state.closed || epoch !== state.epoch) return;
         // Only documents whose own setting changed need an update notification.
         // Saving an unrelated site's rule must not add fake focus events here.
@@ -1591,13 +1669,16 @@ class FocusController {
     if (state.webContents.debugger.isAttached()) {
       const defaultUA = state.webContents.session?.getUserAgent?.() || '';
       await state.webContents.debugger.sendCommand('Emulation.setUserAgentOverride', { userAgent: defaultUA }).catch(() => {});
+      await state.webContents.debugger.sendCommand('Emulation.clearDeviceMetricsOverride').catch(() => {});
     }
     if (state.scriptId && state.webContents.debugger.isAttached()) {
       await state.webContents.debugger.sendCommand('Page.removeScriptToEvaluateOnNewDocument', { identifier: state.scriptId }).catch(() => {});
     }
     if (state.webContents.debugger.isAttached()) {
-      await Promise.allSettled([...state.frameSessions].filter(([, session]) => session.scriptId).map(([id, session]) =>
-        state.webContents.debugger.sendCommand('Page.removeScriptToEvaluateOnNewDocument', { identifier: session.scriptId }, id)));
+      await Promise.allSettled([...state.frameSessions].flatMap(([id, session]) => [
+        ...(session.scriptId ? [state.webContents.debugger.sendCommand('Page.removeScriptToEvaluateOnNewDocument', { identifier: session.scriptId }, id).catch(() => {})] : []),
+        state.webContents.debugger.sendCommand('Emulation.clearDeviceMetricsOverride', {}, id).catch(() => {})
+      ]));
     }
     state.frameSessions.clear();
     const source = buildFocusScript([]);
