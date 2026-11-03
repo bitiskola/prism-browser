@@ -9,8 +9,8 @@ const { navigationURL, normalizeRules, normalizeHost, isWebURL } = require('./po
 const { FaviconController, createImageDecoder } = require('./favicon.cjs');
 const { makeCookieExport, parseCookieExportText, cookieSetDetails, cookieDomainInScope, MAX_FILE_BYTES } = require('./cookies.cjs');
 const { NetworkMonitor } = require('./network.cjs');
-const { FocusController, getChromeUserAgent } = require('./focus.cjs');
-const { DEFAULT_PREFERENCES, SEARCH_ENGINES, normalizeSearch, normalizeProxy, publicProxyConfig, normalizeTyping } = require('./preferences.cjs');
+const { FocusController, getChromeUserAgent, SPOOF_PLATFORMS } = require('./focus.cjs');
+const { DEFAULT_PREFERENCES, SEARCH_ENGINES, normalizeSearch, normalizeProxy, publicProxyConfig, normalizeTyping, normalizeSpoof } = require('./preferences.cjs');
 const { ProxyController } = require('./proxy.cjs');
 const { AdblockController, normalizeAdblockSettings } = require('./adblock.cjs');
 const { ClipboardTyping } = require('./clipboard-typing.cjs');
@@ -29,7 +29,9 @@ let pendingScreenshare = null, sharedTabId = null;
 let saveTimer, stateTimer, closing = false, flushed = false, proxyChangesInFlight = 0;
 let faviconDecoderView, faviconDecoderReady, faviconDecoderShutdown = false;
 let data = { rules: [], bookmarks: [], history: [], tabs: [], activeIndex: 0,
-  search: { ...DEFAULT_PREFERENCES.search }, typing: { ...DEFAULT_PREFERENCES.typing }, proxy: publicProxyConfig(DEFAULT_PREFERENCES.proxy),
+  search: { ...DEFAULT_PREFERENCES.search }, typing: { ...DEFAULT_PREFERENCES.typing },
+  spoof: { ...DEFAULT_PREFERENCES.spoof },
+  proxy: publicProxyConfig(DEFAULT_PREFERENCES.proxy),
   adblock: { enabled: true, allowlist: [], blocklist: [] } };
 const tabs = new Map();
 const downloads = new Map();
@@ -43,6 +45,7 @@ const clipboardTyping = new ClipboardTyping({
 });
 const monitor = new NetworkMonitor({ getRules: () => data.rules, emit: (event, value) => { emit(event, value); scheduleState(); } });
 const focus = new FocusController({ getRules: () => data.rules,
+  getSpoofOptions: () => data.spoof,
   getFrameSessions: id => monitor.getFrameSessions(id),
   onError: (error, id) => { const tab = tabs.get(id); if (tab) { tab.focusError = error.message; scheduleState(); } },
   onStatus: (status, id) => { const tab = tabs.get(id); if (tab) { tab.focusStatus = status; tab.focusError = status.error || ''; scheduleState(); } }
@@ -59,6 +62,7 @@ function readState() {
     data.activeIndex = Math.max(0, Number(saved.activeIndex) || 0);
     try { data.search = normalizeSearch(saved.search); } catch { /* Keep defaults for invalid legacy preferences. */ }
     try { data.typing = normalizeTyping(saved.typing); } catch { /* Keep normal speed for invalid saved preferences. */ }
+    try { data.spoof = normalizeSpoof(saved.spoof); } catch { /* Keep default spoof settings. */ }
     try { data.proxy = publicProxyConfig(normalizeProxy({ ...saved.proxy, username: '', password: '' })); } catch { /* Keep direct defaults for malformed settings. */ }
     try { data.adblock = normalizeAdblockSettings(saved.adblock || data.adblock); } catch { /* Keep default filter settings. */ }
   } catch (error) { if (error.code !== 'ENOENT') console.warn('Could not restore browser state:', error.message); }
@@ -94,9 +98,20 @@ function snapshot() {
     networkPaused: monitor.paused, networkCount: monitor.entries.size,
     isFullscreen: isFull,
     search: data.search, searchEngines: SEARCH_ENGINES, typing: data.typing,
+    spoof: { ...data.spoof },
     proxy: { ...data.proxy, ...proxy?.snapshot(), applying: proxyChangesInFlight > 0, hasCredentials: Boolean(proxy?.getConfig().username || proxy?.getConfig().password), ...(connectionError ? { error: connectionError } : {}) },
     adblock: adblock?.getState() || { ...data.adblock, ready: false, blockedCount: 0 } };
 }
+function getTabUserAgent(isSpoof) {
+  if (!isSpoof) return browserSession.getUserAgent();
+  const spoofOptions = data.spoof || {};
+  if (spoofOptions.osPlatform !== false) {
+    const platKey = spoofOptions.platform || win64;
+    return SPOOF_PLATFORMS[platKey]?.ua || SPOOF_PLATFORMS.win64.ua;
+  }
+  return getChromeUserAgent(browserSession.getUserAgent());
+}
+
 function checkTabSpoof(url) {
   if (!url || !isWebURL(url)) return false;
   try {
@@ -178,11 +193,7 @@ async function refreshPageTools(tab) {
   const wc = tab.view.webContents;
   if (wc.isDestroyed()) return;
   tab.spoofOnLoad = checkTabSpoof(tab.url);
-  if (tab.spoofOnLoad) {
-    wc.setUserAgent(getChromeUserAgent(browserSession.getUserAgent()));
-  } else {
-    wc.setUserAgent(browserSession.getUserAgent());
-  }
+  wc.setUserAgent(getTabUserAgent(tab.spoofOnLoad));
   if (tab.devtoolsRequested || wc.isDevToolsOpened()) {
     tab.focusStatus = { status: 'suspended', error: 'Close Developer Tools to resume spoof mode.' };
     scheduleState();
@@ -217,9 +228,7 @@ async function createTab(url = 'about:blank', activate = true) {
   } });
   const wc = view.webContents;
   const isSpoof = checkTabSpoof(target);
-  if (isSpoof) {
-    wc.setUserAgent(getChromeUserAgent(browserSession.getUserAgent()));
-  }
+  wc.setUserAgent(getTabUserAgent(isSpoof));
   clipboardTyping.attach(wc);
   const tab = { id, view, url: 'about:blank', title: 'New tab', loading: false, error: '', favicon: '', spoofOnLoad: isSpoof, isHtmlFullScreen: false };
   tabs.set(id, tab);
@@ -322,11 +331,7 @@ async function navigate(tab, value) {
   if (previousOrigin !== nextOrigin || !nextOrigin) tab.favicon = '';
   tab.url = url; tab.error = ''; tab.title = url === 'about:blank' ? 'New tab' : new URL(url).hostname;
   tab.spoofOnLoad = checkTabSpoof(url);
-  if (tab.spoofOnLoad) {
-    tab.view.webContents.setUserAgent(getChromeUserAgent(browserSession.getUserAgent()));
-  } else {
-    tab.view.webContents.setUserAgent(browserSession.getUserAgent());
-  }
+  tab.view.webContents.setUserAgent(getTabUserAgent(tab.spoofOnLoad));
   layout(); sendState();
   try { await tab.view.webContents.loadURL(url); } catch (error) { if (error.code !== 'ERR_ABORTED') { tab.error ||= error.message; layout(); sendState(); } }
   scheduleSave();
@@ -417,10 +422,19 @@ async function configureSession() {
     const shouldSpoof = tab ? Boolean(tab.spoofOnLoad) : checkTabSpoof(details.url);
 
     if (shouldSpoof) {
+      const spoofOptions = data.spoof || {};
+      const optOsPlatform = spoofOptions.osPlatform !== false;
+      const targetPlat = spoofOptions.platform || 'win64';
+      const platInfo = SPOOF_PLATFORMS[targetPlat] || SPOOF_PLATFORMS.win64;
+
       for (const key of Object.keys(requestHeaders)) {
         if (typeof requestHeaders[key] === 'string' && (requestHeaders[key].includes('Electron/') || requestHeaders[key].includes('PrismBrowser/'))) {
-          requestHeaders[key] = getChromeUserAgent(requestHeaders[key]);
+          requestHeaders[key] = optOsPlatform ? platInfo.ua : getChromeUserAgent(requestHeaders[key]);
         }
+      }
+      const uaKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'user-agent');
+      if (uaKey && optOsPlatform) {
+        requestHeaders[uaKey] = platInfo.ua;
       }
       const chUaKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'sec-ch-ua');
       if (chUaKey) {
@@ -429,6 +443,12 @@ async function configureSession() {
       const chFullKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'sec-ch-ua-full-version-list');
       if (chFullKey) {
         requestHeaders[chFullKey] = '"Chromium";v="153.0.0.0", "Google Chrome";v="153.0.0.0", "Not(A:Brand";v="24.0.0.0"';
+      }
+      if (optOsPlatform) {
+        const chPlatformKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'sec-ch-ua-platform') || 'sec-ch-ua-platform';
+        requestHeaders[chPlatformKey] = '"' + platInfo.uadPlatform + '"';
+        const chPlatformVersionKey = Object.keys(requestHeaders).find(k => k.toLowerCase() === 'sec-ch-ua-platform-version') || 'sec-ch-ua-platform-version';
+        requestHeaders[chPlatformVersionKey] = '"' + platInfo.platformVersion + '"';
       }
     }
     callback({ requestHeaders });
@@ -678,6 +698,14 @@ async function action(name, payload = {}) {
     case 'get-state': return snapshot();
     case 'search-save': data.search = normalizeSearch(payload.search); saveState(); break;
     case 'typing-save': data.typing = normalizeTyping(payload.typing); saveState(); break;
+    case 'spoof-save': {
+      data.spoof = normalizeSpoof(payload.spoof);
+      saveState();
+      for (const t of tabs.values()) {
+        void refreshPageTools(t);
+      }
+      break;
+    }
     case 'proxy-save': {
       proxyChangesInFlight++;
       favicons?.cancelAll();

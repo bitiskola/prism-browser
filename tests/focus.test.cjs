@@ -558,8 +558,22 @@ test('spoof mode overrides userAgent, appVersion, userAgentData and window.chrom
   const rules = [{ host: 'example.com', focus: true }];
   
   vm.runInContext(buildFocusScript(rules), context);
+  assert.equal(navigator.userAgent, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36');
+  assert.equal(navigator.appVersion, '5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36');
+  assert.equal(navigator.platform, 'Win32');
+
+  // Linux platform
+  vm.runInContext(buildFocusScript(rules, { platform: 'linux64' }), context);
   assert.equal(navigator.userAgent, 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36');
-  assert.equal(navigator.appVersion, '5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36');
+  assert.equal(navigator.platform, 'Linux x86_64');
+
+  // macOS platform
+  vm.runInContext(buildFocusScript(rules, { platform: 'macos64' }), context);
+  assert.equal(navigator.userAgent, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36');
+  assert.equal(navigator.platform, 'MacIntel');
+
+  // Back to default (win64)
+  vm.runInContext(buildFocusScript(rules), context);
   assert.equal(navigator.vendor, 'Google Inc.');
   assert.equal(navigator.userAgent.includes('Electron'), false);
   assert.equal(navigator.appVersion.includes('Electron'), false);

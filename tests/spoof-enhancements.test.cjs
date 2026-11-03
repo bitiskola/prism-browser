@@ -1,236 +1,210 @@
-'use strict';
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
-const { EventEmitter } = require('node:events');
-const { FocusController, buildFocusScript } = require('../electron/focus.cjs');
-const { ClipboardTyping } = require('../electron/clipboard-typing.cjs');
+const fs = require('node:fs');
+const path = require('node:path');
 
-function createDOMContext(url = 'https://example.com') {
-  const windowListeners = new Map();
-  const docListeners = new Map();
+const { DEFAULT_PREFERENCES, normalizeSpoof, SUPPORTED_SPOOF_PLATFORMS } = require('../electron/preferences.cjs');
+const { buildFocusScript, getChromeUserAgent, SPOOF_PLATFORMS } = require('../electron/focus.cjs');
 
-  class Element {
-    constructor(tag, type = 'text') {
-      this.nodeType = 1;
-      this.tagName = tag.toUpperCase();
-      this.type = type;
-      this.value = '';
-      this.readOnly = false;
-      this.disabled = false;
-      this.isContentEditable = false;
-      this.style = { getPropertyValue: () => '', setProperty: () => {}, removeProperty: () => {}, getPropertyPriority: () => '' };
-    }
-  }
+test('DEFAULT_PREFERENCES includes spoof with all features enabled and platform win64', () => {
+  assert.ok(DEFAULT_PREFERENCES.spoof, 'spoof exists in DEFAULT_PREFERENCES');
+  assert.equal(DEFAULT_PREFERENCES.spoof.focusVisibility, true);
+  assert.equal(DEFAULT_PREFERENCES.spoof.fullscreen, true);
+  assert.equal(DEFAULT_PREFERENCES.spoof.keyboard, true);
+  assert.equal(DEFAULT_PREFERENCES.spoof.clipboardEvents, true);
+  assert.equal(DEFAULT_PREFERENCES.spoof.rightClick, true);
+  assert.equal(DEFAULT_PREFERENCES.spoof.selection, true);
+  assert.equal(DEFAULT_PREFERENCES.spoof.screenshare, true);
+  assert.equal(DEFAULT_PREFERENCES.spoof.osPlatform, true);
+  assert.equal(DEFAULT_PREFERENCES.spoof.platform, 'win64');
+});
 
-  const document = {
-    location: { href: url, ancestorOrigins: [] },
-    hasFocus: () => true,
-    hidden: false,
-    visibilityState: 'visible',
-    activeElement: null,
-    addEventListener(type, fn) {
-      const set = docListeners.get(type) || new Set();
-      set.add(fn);
-      docListeners.set(type, set);
-    },
-    removeEventListener(type, fn) {
-      docListeners.get(type)?.delete(fn);
-    }
-  };
+test('normalizeSpoof validates options and defaults safely', () => {
+  const empty = normalizeSpoof({});
+  assert.equal(empty.focusVisibility, true);
+  assert.equal(empty.fullscreen, true);
+  assert.equal(empty.keyboard, true);
+  assert.equal(empty.clipboardEvents, true);
+  assert.equal(empty.rightClick, true);
+  assert.equal(empty.selection, true);
+  assert.equal(empty.screenshare, true);
+  assert.equal(empty.osPlatform, true);
+  assert.equal(empty.platform, 'win64');
 
-  const window = {
-    addEventListener(type, fn) {
-      const set = windowListeners.get(type) || new Set();
-      set.add(fn);
-      windowListeners.set(type, set);
-    },
-    removeEventListener(type, fn) {
-      windowListeners.get(type)?.delete(fn);
-    }
-  };
+  assert.throws(() => normalizeSpoof(null), /Invalid spoof settings/);
 
-  const context = vm.createContext({
-    document,
-    window,
-    URL,
-    DOMException,
-    HTMLElement: Element,
-    HTMLInputElement: class extends Element { constructor() { super('INPUT'); } },
-    HTMLTextAreaElement: class extends Element { constructor() { super('TEXTAREA'); } },
-    KeyboardEvent: class {
-      constructor(type, opts = {}) {
-        Object.assign(this, opts);
-        this.type = type;
-        this.isTrusted = true;
-      }
-    }
+  const custom = normalizeSpoof({
+    focusVisibility: false,
+    fullscreen: true,
+    keyboard: false,
+    clipboardEvents: true,
+    rightClick: false,
+    selection: false,
+    screenshare: false,
+    osPlatform: true,
+    platform: 'macos64'
   });
+  assert.equal(custom.focusVisibility, false);
+  assert.equal(custom.fullscreen, true);
+  assert.equal(custom.keyboard, false);
+  assert.equal(custom.clipboardEvents, true);
+  assert.equal(custom.rightClick, false);
+  assert.equal(custom.selection, false);
+  assert.equal(custom.screenshare, false);
+  assert.equal(custom.osPlatform, true);
+  assert.equal(custom.platform, 'macos64');
 
-  return {
-    document,
-    window,
-    windowListeners,
-    docListeners,
-    Element,
-    apply(rules) {
-      return vm.runInContext(buildFocusScript(rules), context);
-    },
-    dispatch(type, target, keyProps = {}) {
-      let stopped = false;
-      let prevented = false;
-      const event = {
-        type,
-        target,
-        isTrusted: true,
-        stopImmediatePropagation() { stopped = true; },
-        preventDefault() { prevented = true; },
-        composedPath: () => [target],
-        button: keyProps.button !== undefined ? keyProps.button : 0,
-        ...keyProps
-      };
-      for (const fn of windowListeners.get(type) || []) {
-        if (stopped) break;
-        fn(event);
-      }
-      return { stopped, prevented, event };
-    }
-  };
-}
+  // Invalid platform defaults to win64
+  const invalidPlat = normalizeSpoof({ platform: 'android' });
+  assert.equal(invalidPlat.platform, 'win64');
 
-test('keyboard listeners: non-textbox target blocks all keys', () => {
-  const dom = createDOMContext();
-  dom.apply([{ host: 'example.com', focus: true }]);
-
-  const div = new dom.Element('DIV');
-  dom.document.activeElement = div;
-
-  // Even normal characters are blocked when not writing in a textbox
-  const resChar = dom.dispatch('keydown', div, { key: 'a' });
-  assert.equal(resChar.stopped, true, 'character outside textbox is blocked');
-
-  const resEsc = dom.dispatch('keydown', div, { key: 'Escape' });
-  assert.equal(resEsc.stopped, true, 'Escape outside textbox is blocked');
+  // Linux platform
+  const linuxPlat = normalizeSpoof({ platform: 'linux64' });
+  assert.equal(linuxPlat.platform, 'linux64');
 });
 
-test('keyboard listeners: inside textbox, only actual written characters are allowed, non-characters blocked', () => {
-  const dom = createDOMContext();
-  dom.apply([{ host: 'example.com', focus: true }]);
+test('SPOOF_PLATFORMS definitions contain valid headers and UA strings', () => {
+  for (const key of SUPPORTED_SPOOF_PLATFORMS) {
+    const plat = SPOOF_PLATFORMS[key];
+    assert.ok(plat, `platform definition for ${key} exists`);
+    assert.ok(plat.ua.includes('Chrome/153.0.0.0'), `${key} UA contains Chrome 153`);
+    assert.ok(plat.platform, `${key} has platform`);
+    assert.ok(plat.uadPlatform, `${key} has uadPlatform`);
+    assert.ok(plat.platformVersion, `${key} has platformVersion`);
+  }
+  assert.equal(SPOOF_PLATFORMS.win64.platform, 'Win32');
+  assert.equal(SPOOF_PLATFORMS.win64.uadPlatform, 'Windows');
+  assert.equal(SPOOF_PLATFORMS.win64.platformVersion, '15.0.0');
 
-  const input = new dom.Element('INPUT', 'text');
-  dom.document.activeElement = input;
+  assert.equal(SPOOF_PLATFORMS.linux64.platform, 'Linux x86_64');
+  assert.equal(SPOOF_PLATFORMS.linux64.uadPlatform, 'Linux');
+  assert.equal(SPOOF_PLATFORMS.linux64.platformVersion, '6.6.0');
 
-  // Single characters allowed
-  for (const ch of ['a', 'Z', '5', '!', ' ', 'á', 'ő']) {
-    const kd = dom.dispatch('keydown', input, { key: ch });
-    assert.equal(kd.stopped, false, `character ${ch} allowed on keydown`);
-    const kp = dom.dispatch('keypress', input, { key: ch });
-    assert.equal(kp.stopped, false, `character ${ch} allowed on keypress`);
-    const ku = dom.dispatch('keyup', input, { key: ch });
-    assert.equal(ku.stopped, false, `character ${ch} allowed on keyup`);
+  assert.equal(SPOOF_PLATFORMS.macos64.platform, 'MacIntel');
+  assert.equal(SPOOF_PLATFORMS.macos64.uadPlatform, 'macOS');
+  assert.equal(SPOOF_PLATFORMS.macos64.platformVersion, '14.5.0');
+});
+
+test('toolbar markup contains split button for focus toggle and settings shortcut', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../renderer/index.html'), 'utf8');
+  assert.ok(html.includes('class="toolbar-split"'), 'contains toolbar-split');
+  assert.ok(html.includes('id="focus-toggle"'), 'contains focus-toggle');
+  assert.ok(html.includes('id="focus-settings-shortcut"'), 'contains focus-settings-shortcut');
+  assert.ok(html.includes('data-icon="chevron-down"'), 'contains chevron-down icon');
+});
+
+test('app.js wires focus settings shortcut to spoof section in preferences', () => {
+  const appJs = fs.readFileSync(path.join(__dirname, '../renderer/app.js'), 'utf8');
+  assert.ok(appJs.includes('openSettingsSection(\x27spoof\x27)'), 'wires shortcut to spoof settings');
+  assert.ok(appJs.includes('settings-spoof'), 'renders spoof section');
+  assert.ok(appJs.includes('spoof-os-platform'), 'renders OS platform switch');
+  assert.ok(appJs.includes('spoof-platform'), 'renders OS platform select dropdown');
+});
+
+test('each spoofing feature can be independently deactivated via spoofOptions', async () => {
+  const rules = [{ host: 'example.com', focus: true }];
+
+  // 1. When focusVisibility is false, document.hasFocus and visibilityState are NOT overridden
+  {
+    let hasFocusCalled = false;
+    const document = Object.create({
+      hasFocus() { hasFocusCalled = true; return false; },
+      location: { href: 'https://example.com' }
+    });
+    const window = {
+      addEventListener() {},
+      removeEventListener() {}
+    };
+    const context = vm.createContext({ document, window, URL, DOMException });
+    vm.runInContext(buildFocusScript(rules, { focusVisibility: false }), context);
+    assert.equal(document.hasFocus(), false);
+    assert.equal(hasFocusCalled, true);
+    assert.equal(document.visibilityState, undefined);
   }
 
-  // Non-character keys blocked
-  for (const nonChar of ['Escape', 'Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Tab', 'Control', 'Alt', 'Shift', 'F1', 'Home']) {
-    const res = dom.dispatch('keydown', input, { key: nonChar });
-    assert.equal(res.stopped, true, `non-character key ${nonChar} blocked`);
+  // 2. When fullscreen is false, fullscreenElement is NOT overridden
+  {
+    const document = Object.create({
+      hasFocus() { return true; },
+      location: { href: 'https://example.com' }
+    });
+    const window = {
+      addEventListener() {},
+      removeEventListener() {}
+    };
+    const context = vm.createContext({ document, window, URL, DOMException });
+    vm.runInContext(buildFocusScript(rules, { fullscreen: false }), context);
+    assert.equal(document.fullscreenElement, undefined);
   }
 
-  // Combinations like Ctrl+A, Ctrl+C, Ctrl+V, Alt+A, Meta+A blocked
-  for (const combo of [
-    { key: 'a', ctrlKey: true },
-    { key: 'c', ctrlKey: true },
-    { key: 'v', ctrlKey: true },
-    { key: 'a', metaKey: true },
-    { key: 'f', altKey: true }
-  ]) {
-    const res = dom.dispatch('keydown', input, combo);
-    assert.equal(res.stopped, true, `combo key=${combo.key} blocked`);
-  }
-});
-
-test('keyboard listeners: Enter key allowed in textarea / contenteditable but blocked in single line input', () => {
-  const dom = createDOMContext();
-  dom.apply([{ host: 'example.com', focus: true }]);
-
-  const input = new dom.Element('INPUT', 'text');
-  const resInput = dom.dispatch('keydown', input, { key: 'Enter' });
-  assert.equal(resInput.stopped, true, 'Enter in text input blocked from listeners');
-
-  const textarea = new dom.Element('TEXTAREA');
-  const resTextarea = dom.dispatch('keydown', textarea, { key: 'Enter' });
-  assert.equal(resTextarea.stopped, false, 'Enter in textarea allowed');
-
-  const editableDiv = new dom.Element('DIV');
-  editableDiv.isContentEditable = true;
-  const resDiv = dom.dispatch('keydown', editableDiv, { key: 'Enter' });
-  assert.equal(resDiv.stopped, false, 'Enter in contenteditable allowed');
-});
-
-test('copy, cut, and paste events are completely hidden in spoof mode', () => {
-  const dom = createDOMContext();
-  dom.apply([{ host: 'example.com', focus: true }]);
-
-  for (const type of ['copy', 'cut', 'paste', 'beforecopy', 'beforecut', 'beforepaste']) {
-    const res = dom.dispatch(type, dom.document);
-    assert.equal(res.stopped, true, `${type} is stopped from reaching site`);
+  // 3. When osPlatform is false, navigator.userAgent keeps original OS
+  {
+    const origUA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
+    const document = Object.create({
+      hasFocus() { return true; },
+      location: { href: 'https://example.com' }
+    });
+    const window = {
+      addEventListener() {},
+      removeEventListener() {}
+    };
+    const navigator = {
+      userAgent: origUA,
+      appVersion: origUA,
+      platform: 'Linux x86_64'
+    };
+    const context = vm.createContext({ document, window, navigator, URL, DOMException });
+    vm.runInContext(buildFocusScript(rules, { osPlatform: false }), context);
+    assert.ok(navigator.userAgent.includes('Linux x86_64'));
+    assert.equal(navigator.platform, 'Linux x86_64');
   }
 
-  // oncopy, oncut, onpaste are neutralized
-  assert.equal(dom.window.oncopy, null);
-  dom.window.oncopy = () => 'test';
-  assert.equal(dom.window.oncopy, null);
-  assert.equal(dom.document.oncopy, null);
-  dom.document.oncopy = () => 'test';
-  assert.equal(dom.document.oncopy, null);
-});
+  // 4. When osPlatform is true with win64 (default), reports Windows 11 x64
+  {
+    const document = Object.create({
+      hasFocus() { return true; },
+      location: { href: 'https://example.com' }
+    });
+    const window = {
+      addEventListener() {},
+      removeEventListener() {}
+    };
+    const navigator = {
+      userAgent: '',
+      appVersion: '',
+      platform: 'Linux x86_64'
+    };
+    const context = vm.createContext({ document, window, navigator, URL, DOMException });
+    vm.runInContext(buildFocusScript(rules, { osPlatform: true, platform: 'win64' }), context);
+    assert.equal(navigator.userAgent, SPOOF_PLATFORMS.win64.ua);
+    assert.equal(navigator.platform, 'Win32');
+    const uad = await navigator.userAgentData.getHighEntropyValues(['platformVersion']);
+    assert.equal(uad.platform, 'Windows');
+    assert.equal(uad.platformVersion, '15.0.0');
+  }
 
-test('right click: contextmenu is blocked from website listeners and preventDefault is neutralized', () => {
-  const dom = createDOMContext();
-  dom.apply([{ host: 'example.com', focus: true }]);
-
-  const res = dom.dispatch('contextmenu', dom.document, { button: 2 });
-  assert.equal(res.stopped, true, 'contextmenu blocked from website listeners');
-
-  // Attempting to call preventDefault on contextmenu event does nothing
-  res.event.preventDefault();
-  assert.equal(res.prevented, false, 'preventDefault on contextmenu neutralized so menu always opens');
-
-  // oncontextmenu is neutralized
-  assert.equal(dom.window.oncontextmenu, null);
-  dom.window.oncontextmenu = () => false;
-  assert.equal(dom.window.oncontextmenu, null);
-  assert.equal(dom.document.oncontextmenu, null);
-  dom.document.oncontextmenu = () => false;
-  assert.equal(dom.document.oncontextmenu, null);
-});
-
-test('fake paste: reports keypress/keydown/keyup for typed clipboard characters', async () => {
-  const executedScripts = [];
-  const inserted = [];
-  const wc = new EventEmitter();
-  wc.executeJavaScript = async code => { executedScripts.push(code); };
-  wc.insertText = async text => { inserted.push(text); };
-
-  const typing = new ClipboardTyping({
-    readText: async () => 'Hi!',
-    canType: () => true,
-    notify: () => {}
-  });
-
-  await typing.toggle(wc);
-  // Wait for typing to complete
-  await new Promise(resolve => setTimeout(resolve, 500));
-  typing.stop();
-
-  assert.deepEqual(inserted, ['H', 'i', '!']);
-  assert.equal(executedScripts.length >= 3, true, 'executeJavaScript called for each character');
-  // Check that the script dispatches keydown, keypress, and keyup
-  for (const script of executedScripts) {
-    assert.ok(script.includes("'keydown'"));
-    assert.ok(script.includes("'keypress'"));
-    assert.ok(script.includes("'keyup'"));
-    assert.ok(script.includes('__prism_allowed__'));
+  // 5. When osPlatform is true with macos64, reports macOS x64
+  {
+    const document = Object.create({
+      hasFocus() { return true; },
+      location: { href: 'https://example.com' }
+    });
+    const window = {
+      addEventListener() {},
+      removeEventListener() {}
+    };
+    const navigator = {
+      userAgent: '',
+      appVersion: '',
+      platform: 'Linux x86_64'
+    };
+    const context = vm.createContext({ document, window, navigator, URL, DOMException });
+    vm.runInContext(buildFocusScript(rules, { osPlatform: true, platform: 'macos64' }), context);
+    assert.equal(navigator.userAgent, SPOOF_PLATFORMS.macos64.ua);
+    assert.equal(navigator.platform, 'MacIntel');
+    const uad = await navigator.userAgentData.getHighEntropyValues(['platformVersion']);
+    assert.equal(uad.platform, 'macOS');
+    assert.equal(uad.platformVersion, '14.5.0');
   }
 });

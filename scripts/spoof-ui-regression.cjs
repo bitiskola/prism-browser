@@ -129,6 +129,14 @@ const assert=require('node:assert/strict');
     // Old preview fixtures without runtime status keep their saved-rule behavior.
     await page.evaluate(()=>{const data=window.__spoofUI;data.publish({activeTabId:'a',tabs:data.state().tabs.map(({focusStatus,...tab})=>tab)});});
     assert.equal(await focus.getAttribute('aria-pressed'),'true');
+
+    // Clicking focus settings shortcut opens spoof preferences section
+    await page.locator('#focus-settings-shortcut').click();
+    await page.waitForFunction(() => document.querySelector('#settings-spoof') !== null);
+    assert.equal(await page.locator('#settings-spoof').isVisible(), true);
+    assert.equal(await page.locator('#spoof-settings-form').isVisible(), true);
+    assert.equal(await page.locator('#spoof-os-platform').isVisible(), true);
+    assert.equal(await page.locator('#spoof-platform').isVisible(), true);
     assert.deepEqual(errors,[]);
     console.log(JSON.stringify({passed:true,checks:['serialized rapid toggles','pending amber status without false success','toolbar/settings shared guard','failed disable retains active state','runtime error shown with retry','retry leaves rule enabled','failed restoration remains visible and retryable','DevTools suspension message','tab and host preserved across delayed response','modal save guard and rejection recovery','initial off/error toolbar enables rule','preview compatibility','no renderer exceptions']}));
   }finally{await browser.close();}

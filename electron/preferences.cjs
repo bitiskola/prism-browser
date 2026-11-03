@@ -23,6 +23,17 @@ const SEARCH_TEMPLATES = Object.freeze({
 const DEFAULT_PREFERENCES = Object.freeze({
   typing: Object.freeze({ speed: 1 }),
   search: Object.freeze({ engine: 'google', customTemplate: '' }),
+  spoof: Object.freeze({
+    focusVisibility: true,
+    fullscreen: true,
+    keyboard: true,
+    clipboardEvents: true,
+    rightClick: true,
+    selection: true,
+    screenshare: true,
+    osPlatform: true,
+    platform: 'win64',
+  }),
   proxy: Object.freeze({
     enabled: false, type: 'http', host: '', port: 8080,
     bypass: 'localhost,127.0.0.1,[::1]', username: '', password: '',
@@ -41,6 +52,26 @@ function normalizeTyping(input = DEFAULT_PREFERENCES.typing) {
     throw new Error('Choose a typing speed between 0.25× and 3×.');
   }
   return { speed };
+}
+
+const SUPPORTED_SPOOF_PLATFORMS = Object.freeze(['win64', 'linux64', 'macos64']);
+
+function normalizeSpoof(input = DEFAULT_PREFERENCES.spoof) {
+  objectInput(input, 'spoof');
+  const platform = typeof input.platform === 'string' && SUPPORTED_SPOOF_PLATFORMS.includes(input.platform)
+    ? input.platform
+    : 'win64';
+  return {
+    focusVisibility: input.focusVisibility !== false,
+    fullscreen: input.fullscreen !== false,
+    keyboard: input.keyboard !== false,
+    clipboardEvents: input.clipboardEvents !== false,
+    rightClick: input.rightClick !== false,
+    selection: input.selection !== false,
+    screenshare: input.screenshare !== false,
+    osPlatform: input.osPlatform !== false,
+    platform,
+  };
 }
 
 function normalizeTemplate(value, required) {
@@ -169,5 +200,6 @@ function publicProxyConfig(config) {
 
 module.exports = {
   SEARCH_ENGINES, DEFAULT_PREFERENCES, normalizeSearch, searchURL, normalizeTyping,
+  normalizeSpoof, SUPPORTED_SPOOF_PLATFORMS,
   normalizeProxy, publicProxyConfig, normalizeProxyHost,
 };
