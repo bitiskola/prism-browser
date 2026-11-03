@@ -584,9 +584,20 @@ async function configureSession() {
           sharedTabId = selection.id;
           layout();
           const chosen = availableTabs.find(t => t.id === selection.id);
+          const setCastState = (active) => {
+            const script = `try { window.__prism_tab_cast_active = ${active}; window.dispatchEvent(new CustomEvent('__prism_tab_cast_change__', { detail: { active: ${active} } })); } catch {} void 0;`;
+            if (chosen && !chosen.view.webContents.isDestroyed()) {
+              chosen.view.webContents.executeJavaScript(script).catch(() => {});
+            }
+            if (requestingTab && requestingTab !== chosen && !requestingTab.view.webContents.isDestroyed()) {
+              requestingTab.view.webContents.executeJavaScript(script).catch(() => {});
+            }
+          };
+          setCastState(true);
           const cleanup = () => {
             if (sharedTabId === selection.id) {
               sharedTabId = null;
+              setCastState(false);
               layout();
             }
           };

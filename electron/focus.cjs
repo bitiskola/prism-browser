@@ -262,10 +262,15 @@ function patchDocument(rules, spoofOptions = {}) {
   const optRightClick = spoofOptions.rightClick !== false;
   const optSelection = spoofOptions.selection !== false;
   const optScreenshare = spoofOptions.screenshare !== false;
+  const optScreenshareCursor = spoofOptions.screenshareCursor !== false;
   const optOsPlatform = spoofOptions.osPlatform !== false;
   const targetPlatformKey = spoofOptions.platform || 'win64';
   const optBrowser = spoofOptions.browserIdentity !== false;
   const targetBrowserKey = spoofOptions.browser || 'chrome';
+
+  let activeCastTracksCount = 0;
+  let cursorHost = null;
+  let cursorEl = null;
 
   const descriptors = [];
   const listeners = [];
@@ -299,6 +304,16 @@ function patchDocument(rules, spoofOptions = {}) {
         if (original) Object.defineProperty(owner, name, original);
         else delete owner[name];
       } catch { /* A page may deliberately freeze its properties after installation. */ }
+    }
+    if (cursorHost) {
+      try {
+        if (typeof cursorHost.remove === 'function') cursorHost.remove();
+        else if (cursorHost.parentNode && typeof cursorHost.parentNode.removeChild === 'function') {
+          cursorHost.parentNode.removeChild(cursorHost);
+        }
+      } catch {}
+      cursorHost = null;
+      cursorEl = null;
     }
     try { delete window.__prism_report_display_surface; } catch {} 
     try { delete document[key]; } catch { /* Best effort if a page freezes the document. */ }
@@ -449,20 +464,170 @@ function patchDocument(rules, spoofOptions = {}) {
       }
     }
 
+    // Fullscreen resolution spoofing (embedded in optFullscreen):
+    // Reports target device real fullscreen resolution (1920x1080 Full HD, 24-bit, 1:1 dpr)
+    // and keeps it locked even when toggling window fullscreen with Ctrl+F / controls.
+    const fsResolution = {
+      width: 1920,
+      height: 1080,
+      availWidth: 1920,
+      availHeight: 1080,
+      availLeft: 0,
+      availTop: 0,
+      colorDepth: 24,
+      pixelDepth: 24
+    };
+
+    if (typeof Screen !== 'undefined' && Screen.prototype) {
+      for (const [prop, val] of Object.entries(fsResolution)) {
+        let owner = Screen.prototype;
+        while (owner && !Object.hasOwn(owner, prop)) owner = Object.getPrototypeOf(owner);
+        if (!owner) owner = Screen.prototype;
+        const original = Object.getOwnPropertyDescriptor(owner, prop);
+        if (original?.get) {
+          define(prop, { ...original, get: function () { return val; } }, owner);
+        } else {
+          define(prop, { get: () => val, configurable: true }, owner);
+        }
+      }
+    }
+
+    if (typeof window !== 'undefined' && window.screen) {
+      for (const [prop, val] of Object.entries(fsResolution)) {
+        define(prop, { get: () => val, configurable: true }, window.screen);
+      }
+    }
+
+    const fsWindowDims = {
+      innerWidth: 1920,
+      innerHeight: 1080,
+      outerWidth: 1920,
+      outerHeight: 1080,
+      screenX: 0,
+      screenY: 0,
+      screenLeft: 0,
+      screenTop: 0,
+      devicePixelRatio: 1
+    };
+
+    if (typeof window !== 'undefined') {
+      const winProto = (typeof Window !== 'undefined' && Window.prototype) || Object.getPrototypeOf(window);
+      for (const [prop, val] of Object.entries(fsWindowDims)) {
+        if (winProto) {
+          let owner = winProto;
+          while (owner && !Object.hasOwn(owner, prop)) owner = Object.getPrototypeOf(owner);
+          if (owner) {
+            const original = Object.getOwnPropertyDescriptor(owner, prop);
+            if (original?.get) {
+              define(prop, { ...original, get: function () { return val; } }, owner);
+            } else {
+              define(prop, { get: () => val, configurable: true }, owner);
+            }
+          }
+        }
+        define(prop, { get: () => val, configurable: true }, window);
+      }
+    }
+
+    if (typeof Element !== 'undefined' && Element.prototype) {
+      let owner = Element.prototype;
+      while (owner && !Object.hasOwn(owner, 'clientWidth')) owner = Object.getPrototypeOf(owner);
+      if (!owner) owner = Element.prototype;
+      const origClientWidth = Object.getOwnPropertyDescriptor(owner, 'clientWidth');
+      if (origClientWidth?.get) {
+        define('clientWidth', {
+          ...origClientWidth,
+          get: function () {
+            if (typeof document !== 'undefined' && (this === document.documentElement || this === document.body)) {
+              return 1920;
+            }
+            return Reflect.apply(origClientWidth.get, this, []);
+          }
+        }, owner);
+      } else {
+        define('clientWidth', {
+          get: function () {
+            if (typeof document !== 'undefined' && (this === document.documentElement || this === document.body)) {
+              return 1920;
+            }
+            return origClientWidth ? origClientWidth.value : 1920;
+          },
+          configurable: true
+        }, owner);
+      }
+
+      const origClientHeight = Object.getOwnPropertyDescriptor(owner, 'clientHeight');
+      if (origClientHeight?.get) {
+        define('clientHeight', {
+          ...origClientHeight,
+          get: function () {
+            if (typeof document !== 'undefined' && (this === document.documentElement || this === document.body)) {
+              return 1080;
+            }
+            return Reflect.apply(origClientHeight.get, this, []);
+          }
+        }, owner);
+      } else {
+        define('clientHeight', {
+          get: function () {
+            if (typeof document !== 'undefined' && (this === document.documentElement || this === document.body)) {
+              return 1080;
+            }
+            return origClientHeight ? origClientHeight.value : 1080;
+          },
+          configurable: true
+        }, owner);
+      }
+    }
+
+    if (typeof document !== 'undefined') {
+      if (document.documentElement) {
+        define('clientWidth', { get: () => 1920, configurable: true }, document.documentElement);
+        define('clientHeight', { get: () => 1080, configurable: true }, document.documentElement);
+      }
+      if (document.body) {
+        define('clientWidth', { get: () => 1920, configurable: true }, document.body);
+        define('clientHeight', { get: () => 1080, configurable: true }, document.body);
+      }
+    }
+
+    const stopResizeEvent = e => {
+      if (e && e.isTrusted && typeof e.stopImmediatePropagation === 'function') {
+        e.stopImmediatePropagation();
+      }
+    };
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('resize', stopResizeEvent, true);
+      listeners.push(['resize', stopResizeEvent]);
+    }
+
     if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
       const origMatchMedia = window.matchMedia.bind(window);
       define("matchMedia", {
         value: function matchMedia(query) {
           const m = origMatchMedia(query);
-          if (typeof query === "string" && query.includes("display-mode") && query.includes("fullscreen")) {
-            return new Proxy(m, {
-              get(target, prop) {
-                if (prop === "matches") return true;
-                if (prop === "media") return query;
-                const v = target[prop];
-                return typeof v === "function" ? v.bind(target) : v;
-              }
-            });
+          if (typeof query === "string") {
+            const q = query.toLowerCase();
+            if (q.includes("display-mode") && q.includes("fullscreen")) {
+              return new Proxy(m, {
+                get(target, prop) {
+                  if (prop === "matches") return true;
+                  if (prop === "media") return query;
+                  const v = target[prop];
+                  return typeof v === "function" ? v.bind(target) : v;
+                }
+              });
+            }
+            if (q.includes("width: 1920px") || q.includes("min-width: 1920px") || q.includes("height: 1080px") || q.includes("min-height: 1080px")) {
+              return new Proxy(m, {
+                get(target, prop) {
+                  if (prop === "matches") return true;
+                  if (prop === "media") return query;
+                  const v = target[prop];
+                  return typeof v === "function" ? v.bind(target) : v;
+                }
+              });
+            }
           }
           return m;
         },
@@ -759,8 +924,11 @@ function patchDocument(rules, spoofOptions = {}) {
           }
           const allTracks = (typeof stream.getVideoTracks === 'function') ? stream.getVideoTracks() : [];
           for (const track of allTracks) {
+            activeCastTracksCount++;
             if (typeof track.addEventListener === 'function') {
               track.addEventListener('ended', () => {
+                activeCastTracksCount = Math.max(0, activeCastTracksCount - 1);
+                if (typeof onCastChange === 'function') onCastChange();
                 try { console.info('__prism_screenshare_ended__'); } catch {}
               }, { once: true });
             }
@@ -774,6 +942,152 @@ function patchDocument(rules, spoofOptions = {}) {
         writable: true,
         configurable: true
       }, mediaOwner);
+    }
+  }
+
+  // Screenshare cursor containment: when casting tab, keep cursor visible parked ~1cm from exit boundary
+  let onCastChange;
+  if (optScreenshareCursor) {
+    const MARGIN_CM = 38; // ~1cm at standard 96 CSS DPI
+    let lastX = 960;
+    let lastY = 540;
+    if (typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth > 0) {
+      lastX = Math.round(window.innerWidth / 2);
+      lastY = Math.round(window.innerHeight / 2);
+    }
+
+    const isTabCasting = () => {
+      if (typeof window === 'undefined') return false;
+      return Boolean(
+        window.__prism_tab_cast_active ||
+        window.__prism_force_cursor_containment ||
+        activeCastTracksCount > 0
+      );
+    };
+
+    const ensureOverlayElement = () => {
+      if (cursorEl) return cursorEl;
+      if (typeof document === 'undefined') return null;
+      const parent = document.body || document.documentElement;
+      if (!parent) return null;
+
+      cursorHost = document.createElement('div');
+      cursorHost.id = '__prism_cast_cursor_host__';
+      cursorHost.setAttribute('aria-hidden', 'true');
+      cursorHost.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;pointer-events:none;overflow:visible;';
+
+      const shadow = (typeof cursorHost.attachShadow === 'function')
+        ? cursorHost.attachShadow({ mode: 'open' })
+        : cursorHost;
+
+      const style = document.createElement('style');
+      style.textContent = `
+        .prism-cast-pointer {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 24px;
+          height: 24px;
+          margin-left: -4px;
+          margin-top: -2px;
+          pointer-events: none !important;
+          user-select: none !important;
+          z-index: 2147483647 !important;
+          filter: drop-shadow(1px 2px 2px rgba(0,0,0,0.45));
+          transition: none !important;
+          display: none;
+        }
+      `;
+
+      const pointer = document.createElement('div');
+      pointer.className = 'prism-cast-pointer';
+      pointer.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 2 L4 20 L8.5 15.5 L12.5 23 L15.5 21.5 L11.5 14 L17.5 14 Z" fill="#FFFFFF" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+
+      shadow.appendChild(style);
+      shadow.appendChild(pointer);
+      parent.appendChild(cursorHost);
+      if (!cursorHost.parentNode) cursorHost.parentNode = parent;
+      cursorEl = pointer;
+      return cursorEl;
+    };
+
+    const hideOverlay = () => {
+      if (cursorEl) {
+        cursorEl.style.display = 'none';
+      }
+    };
+
+    const showStuckCursor = () => {
+      if (!isTabCasting()) return;
+      const W = (typeof window !== 'undefined' && window.innerWidth) || 1920;
+      const H = (typeof window !== 'undefined' && window.innerHeight) || 1080;
+
+      const dLeft = Math.max(0, lastX);
+      const dRight = Math.max(0, W - lastX);
+      const dTop = Math.max(0, lastY);
+      const dBottom = Math.max(0, H - lastY);
+      const minD = Math.min(dLeft, dRight, dTop, dBottom);
+
+      let parkX = lastX;
+      let parkY = lastY;
+
+      if (minD === dLeft) {
+        parkX = MARGIN_CM;
+        parkY = Math.max(MARGIN_CM, Math.min(H - MARGIN_CM, lastY));
+      } else if (minD === dRight) {
+        parkX = W - MARGIN_CM;
+        parkY = Math.max(MARGIN_CM, Math.min(H - MARGIN_CM, lastY));
+      } else if (minD === dTop) {
+        parkX = Math.max(MARGIN_CM, Math.min(W - MARGIN_CM, lastX));
+        parkY = MARGIN_CM;
+      } else {
+        parkX = Math.max(MARGIN_CM, Math.min(W - MARGIN_CM, lastX));
+        parkY = H - MARGIN_CM;
+      }
+
+      const el = ensureOverlayElement();
+      if (el) {
+        el.style.transform = `translate3d(${Math.round(parkX)}px, ${Math.round(parkY)}px, 0)`;
+        el.style.display = 'block';
+      }
+    };
+
+    const onMove = e => {
+      if (e && typeof e.clientX === 'number' && typeof e.clientY === 'number') {
+        lastX = e.clientX;
+        lastY = e.clientY;
+      }
+      hideOverlay();
+    };
+
+    const onLeave = e => {
+      if (e && (e.type === 'mouseleave' || e.type === 'mouseout')) {
+        if (e.relatedTarget || e.toElement) return;
+      }
+      showStuckCursor();
+    };
+
+    onCastChange = () => {
+      if (!isTabCasting()) hideOverlay();
+    };
+
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('mousemove', onMove, true);
+      window.addEventListener('pointermove', onMove, true);
+      window.addEventListener('mouseenter', onMove, true);
+      window.addEventListener('blur', onLeave, true);
+      window.addEventListener('__prism_tab_cast_change__', onCastChange, true);
+      listeners.push(['mousemove', onMove]);
+      listeners.push(['pointermove', onMove]);
+      listeners.push(['mouseenter', onMove]);
+      listeners.push(['blur', onLeave]);
+      listeners.push(['__prism_tab_cast_change__', onCastChange]);
+    }
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('mouseleave', onLeave, true);
+      document.addEventListener('mouseout', onLeave, true);
+      docListeners.push(['mouseleave', onLeave]);
+      docListeners.push(['mouseout', onLeave]);
     }
   }
 

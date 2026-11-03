@@ -357,3 +357,202 @@ test('electron/preload.cjs includes spoof-save in allowed actions Set', () => {
   const content = fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8');
   assert.ok(content.includes("'spoof-save'"), 'preload.cjs actions includes spoof-save');
 });
+
+test('fullscreen lock embeds 1920x1080 true fullscreen resolution spoofing and suppresses resize events', () => {
+  const rules = [{ host: 'exam.test', focus: true }];
+  const Element = function() {};
+  Element.prototype.clientWidth = 800;
+  Element.prototype.clientHeight = 600;
+
+  const docProto = { hasFocus() { return true; } };
+  const Document = function() {};
+  Document.prototype = docProto;
+
+  const document = Object.create(docProto);
+  document.documentElement = Object.create(Element.prototype);
+  document.body = Object.create(Element.prototype);
+  document.location = { href: 'https://exam.test/quiz' };
+
+  const windowListeners = new Map();
+  const screen = {
+    width: 1366,
+    height: 768,
+    availWidth: 1366,
+    availHeight: 728,
+    availLeft: 0,
+    availTop: 0,
+    colorDepth: 24,
+    pixelDepth: 24
+  };
+
+  const window = {
+    screen,
+    innerWidth: 1024,
+    innerHeight: 700,
+    outerWidth: 1024,
+    outerHeight: 740,
+    devicePixelRatio: 1.25,
+    screenX: 20,
+    screenY: 30,
+    addEventListener(type, fn) {
+      const set = windowListeners.get(type) || new Set();
+      set.add(fn);
+      windowListeners.set(type, set);
+    },
+    removeEventListener(type, fn) {
+      windowListeners.get(type)?.delete(fn);
+    },
+    matchMedia(q) {
+      return { matches: false, media: q };
+    }
+  };
+
+  const Screen = function() {};
+  Screen.prototype = Object.getPrototypeOf(screen);
+
+  const context = vm.createContext({ document, window, screen, Screen, Element, Document, URL, DOMException });
+
+  // 1. Before spoof mode, resolution is native/custom
+  assert.equal(window.innerWidth, 1024);
+  assert.equal(screen.width, 1366);
+
+  // 2. Apply spoof mode with fullscreen: true
+  const res = vm.runInContext(buildFocusScript(rules, { fullscreen: true }), context);
+  assert.equal(res, true);
+
+  // 3. Screen and window dimensions are locked to 1920x1080 Full HD
+  assert.equal(screen.width, 1920);
+  assert.equal(screen.height, 1080);
+  assert.equal(screen.availWidth, 1920);
+  assert.equal(screen.availHeight, 1080);
+  assert.equal(screen.availLeft, 0);
+  assert.equal(screen.availTop, 0);
+  assert.equal(window.innerWidth, 1920);
+  assert.equal(window.innerHeight, 1080);
+  assert.equal(window.outerWidth, 1920);
+  assert.equal(window.outerHeight, 1080);
+  assert.equal(window.devicePixelRatio, 1);
+  assert.equal(window.screenX, 0);
+  assert.equal(window.screenY, 0);
+
+  // 4. documentElement and body clientWidth/clientHeight report 1920x1080
+  assert.equal(document.documentElement.clientWidth, 1920);
+  assert.equal(document.documentElement.clientHeight, 1080);
+  assert.equal(document.body.clientWidth, 1920);
+  assert.equal(document.body.clientHeight, 1080);
+
+  // 5. matchMedia matches fullscreen and 1920x1080 queries
+  assert.equal(window.matchMedia('(display-mode: fullscreen)').matches, true);
+  assert.equal(window.matchMedia('(width: 1920px)').matches, true);
+  assert.equal(window.matchMedia('(min-width: 1920px)').matches, true);
+  assert.equal(window.matchMedia('(height: 1080px)').matches, true);
+
+  // 6. Trusted resize event (e.g. from Ctrl+F window switch) is suppressed
+  let stopped = false;
+  const resizeEvt = { type: 'resize', isTrusted: true, stopImmediatePropagation: () => { stopped = true; } };
+  for (const fn of windowListeners.get('resize') || []) fn(resizeEvt);
+  assert.equal(stopped, true, 'trusted resize event stopped');
+
+  // 7. Disabling restores original properties
+  vm.runInContext(buildFocusScript([]), context);
+  assert.equal(screen.width, 1366);
+  assert.equal(screen.height, 768);
+  assert.equal(window.innerWidth, 1024);
+  assert.equal(window.innerHeight, 700);
+});
+
+test('screenshare cursor containment parks pointer ~1cm from exit side during tab cast and restores on return', () => {
+  const rules = [{ host: 'exam.test', focus: true }];
+  const docListeners = new Map();
+  const winListeners = new Map();
+
+  let appendedHost = null;
+  const body = {
+    appendChild(el) { el.parentNode = this; appendedHost = el; return el; },
+    removeChild(el) { if (appendedHost === el) { appendedHost = null; el.parentNode = null; } }
+  };
+
+  const document = {
+    body,
+    documentElement: body,
+    location: { href: 'https://exam.test/quiz' },
+    hasFocus() { return true; },
+    createElement(tag) {
+      const el = {
+        tagName: tag.toUpperCase(),
+        style: {},
+        setAttribute(k, v) { this[k] = v; },
+        appendChild(child) { this.children = this.children || []; this.children.push(child); return child; },
+        parentNode: null
+      };
+      el.attachShadow = () => el;
+      return el;
+    },
+    addEventListener(type, fn) {
+      const set = docListeners.get(type) || new Set();
+      set.add(fn);
+      docListeners.set(type, set);
+    },
+    removeEventListener(type, fn) {
+      docListeners.get(type)?.delete(fn);
+    }
+  };
+  body.parentNode = document;
+
+  const window = {
+    innerWidth: 1920,
+    innerHeight: 1080,
+    __prism_tab_cast_active: true,
+    addEventListener(type, fn) {
+      const set = winListeners.get(type) || new Set();
+      set.add(fn);
+      winListeners.set(type, set);
+    },
+    removeEventListener(type, fn) {
+      winListeners.get(type)?.delete(fn);
+    }
+  };
+
+  const context = vm.createContext({ document, window, URL, DOMException });
+  vm.runInContext(buildFocusScript(rules, { screenshareCursor: true }), context);
+
+  // Simulate mouse movement inside tab
+  for (const fn of winListeners.get('mousemove') || []) {
+    fn({ clientX: 1900, clientY: 450 });
+  }
+
+  // Simulate cursor leaving the tab (mouseleave on document)
+  for (const fn of docListeners.get('mouseleave') || []) {
+    fn({ type: 'mouseleave' });
+  }
+
+  assert.ok(appendedHost, 'cursor host element created and appended');
+  const pointerEl = appendedHost.children?.find(c => c.className === 'prism-cast-pointer');
+  assert.ok(pointerEl, 'pointer element exists inside host');
+  assert.equal(pointerEl.style.display, 'block');
+
+  // Since cursor was at x=1900, y=450 on a 1920x1080 view, closest edge is RIGHT
+  // Parked at x = 1920 - 38 = 1882, y = 450
+  assert.equal(pointerEl.style.transform, 'translate3d(1882px, 450px, 0)');
+  assert.ok(pointerEl.innerHTML.includes('<svg'), 'contains SVG pointer arrow');
+
+  // When mouse re-enters (mousemove inside tab), stuck cursor hides
+  for (const fn of winListeners.get('mousemove') || []) {
+    fn({ clientX: 1500, clientY: 500 });
+  }
+  assert.equal(pointerEl.style.display, 'none');
+
+  // Move near top edge (500, 10) and leave: should park at top (500, 38)
+  for (const fn of winListeners.get('mousemove') || []) {
+    fn({ clientX: 500, clientY: 10 });
+  }
+  for (const fn of docListeners.get('mouseleave') || []) {
+    fn({ type: 'mouseleave' });
+  }
+  assert.equal(pointerEl.style.display, 'block');
+  assert.equal(pointerEl.style.transform, 'translate3d(500px, 38px, 0)');
+
+  // Disabling spoof mode cleans up host from DOM
+  vm.runInContext(buildFocusScript([]), context);
+  assert.equal(appendedHost, null, 'cursor host removed on disable');
+});
