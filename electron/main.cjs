@@ -178,6 +178,19 @@ const focus = new FocusController({ getRules: () => data.rules,
     if (!tab || !tab.view) return { width: 0, height: 0 };
     return tab.view.getBounds();
   },
+  onScaleApplied: (tabId, scale) => {
+    if (tabId === sharedTabId) {
+      if (lastBroadcastScale !== scale) {
+        lastBroadcastScale = scale;
+        const scaleScript = `try { window.__prism_tab_scale = ${scale}; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: ${scale} } })); } catch {} void 0;`;
+        for (const tab of tabs.values()) {
+          if (tab.view && !tab.view.webContents.isDestroyed()) {
+            tab.view.webContents.executeJavaScript(scaleScript).catch(() => {});
+          }
+        }
+      }
+    }
+  },
   getSpoofOptions: () => data.spoof,
   getFrameSessions: id => monitor.getFrameSessions(id),
   onError: (error, id) => { const tab = tabs.get(id); if (tab) { tab.focusError = error.message; scheduleState(); } },
@@ -334,18 +347,7 @@ function layout() {
   if (!viewport.visible && win.webContents && !win.webContents.isDestroyed()) {
     win.webContents.focus();
   }
-  if (sharedTabId) {
-    const scale = (focus && typeof focus.computeScale === 'function') ? focus.computeScale(sharedTabId, targetRes) : 1;
-    if (lastBroadcastScale !== scale) {
-      lastBroadcastScale = scale;
-      const scaleScript = `try { window.__prism_tab_scale = ${scale}; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: ${scale} } })); } catch {} void 0;`;
-      for (const tab of tabs.values()) {
-        if (tab.view && !tab.view.webContents.isDestroyed()) {
-          tab.view.webContents.executeJavaScript(scaleScript).catch(() => {});
-        }
-      }
-    }
-  } else {
+  if (!sharedTabId) {
     lastBroadcastScale = null;
   }
 }

@@ -911,37 +911,22 @@ function patchDocument(rules, spoofOptions = {}) {
                 const processor = new MediaStreamTrackProcessor({ track: videoTrack });
                 const generator = new MediaStreamTrackGenerator({ kind: 'video' });
 
-                let currentScale = null;
-                let targetScale = 1;
-
                 const transformer = new TransformStream({
                   async transform(frame, controller) {
                     try {
-                      const reportedScale = (typeof window.__prism_tab_scale === 'number' && window.__prism_tab_scale > 0)
+                      const scale = (typeof window.__prism_tab_scale === 'number' && window.__prism_tab_scale > 0)
                         ? window.__prism_tab_scale
                         : 1;
-                      targetScale = reportedScale;
 
-                      if (currentScale === null) {
-                        currentScale = targetScale;
-                      } else if (Math.abs(currentScale - targetScale) > 0.001) {
-                        currentScale += (targetScale - currentScale) * 0.35;
-                        if (Math.abs(currentScale - targetScale) < 0.002) {
-                          currentScale = targetScale;
-                        }
-                      } else {
-                        currentScale = targetScale;
-                      }
-
-                      if (currentScale < 0.999) {
+                      if (scale < 0.999) {
                         const startX = (frame.visibleRect && typeof frame.visibleRect.x === 'number') ? frame.visibleRect.x : 0;
                         const startY = (frame.visibleRect && typeof frame.visibleRect.y === 'number') ? frame.visibleRect.y : 0;
                         const srcW = (frame.visibleRect && typeof frame.visibleRect.width === 'number') ? frame.visibleRect.width : frame.displayWidth;
                         const srcH = (frame.visibleRect && typeof frame.visibleRect.height === 'number') ? frame.visibleRect.height : frame.displayHeight;
                         const maxW = (typeof frame.codedWidth === 'number' && frame.codedWidth > 0) ? frame.codedWidth - startX : srcW;
                         const maxH = (typeof frame.codedHeight === 'number' && frame.codedHeight > 0) ? frame.codedHeight - startY : srcH;
-                        const subW = Math.max(1, Math.min(maxW, Math.round(srcW * currentScale)));
-                        const subH = Math.max(1, Math.min(maxH, Math.round(srcH * currentScale)));
+                        const subW = Math.max(1, Math.min(maxW, Math.round(srcW * scale)));
+                        const subH = Math.max(1, Math.min(maxH, Math.round(srcH * scale)));
                         const cropped = new VideoFrame(frame, {
                           visibleRect: { x: startX, y: startY, width: subW, height: subH },
                           displayWidth: frame.displayWidth,
@@ -1384,7 +1369,8 @@ function buildFocusScript(rules, spoofOptions = {}) {
 }
 
 class FocusController {
-  constructor({ getRules, getSpoofOptions = () => ({}), getTargetResolution = () => ({ width: 1920, height: 1080 }), getViewBounds = () => ({ width: 0, height: 0 }), getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
+  constructor({ getRules, getSpoofOptions = () => ({}), getTargetResolution = () => ({ width: 1920, height: 1080 }), getViewBounds = () => ({ width: 0, height: 0 }), onScaleApplied = () => {}, getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
+    this.onScaleApplied = onScaleApplied;
     this.getViewBounds = getViewBounds;
     this.getRules = getRules;
     this.getSpoofOptions = getSpoofOptions;
@@ -1435,6 +1421,15 @@ class FocusController {
         try {
           await state.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', deviceMetricsParams, id);
         } catch {}
+      }
+      try {
+        await Promise.race([
+          state.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))'),
+          new Promise(r => setTimeout(r, 60))
+        ]);
+      } catch {}
+      if (typeof this.onScaleApplied === 'function') {
+        this.onScaleApplied(tabId, scale);
       }
     } catch {}
   }
