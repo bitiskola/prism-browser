@@ -173,7 +173,6 @@ function stopCursorTracking() {
 
 const focus = new FocusController({ getRules: () => data.rules,
   getTargetResolution: () => getFullscreenResolution(),
-  isTabShared: id => id === sharedTabId,
   getViewBounds: id => {
     const tab = tabs.get(id);
     if (!tab || !tab.view) return { width: 0, height: 0 };
@@ -319,6 +318,16 @@ function layout() {
   }
   if (!viewport.visible && win.webContents && !win.webContents.isDestroyed()) {
     win.webContents.focus();
+  }
+  if (sharedTabId) {
+    const targetRes = getFullscreenResolution();
+    const scale = (focus && typeof focus.computeScale === 'function') ? focus.computeScale(sharedTabId, targetRes) : 1;
+    const scaleScript = `try { window.__prism_tab_scale = ${scale}; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: ${scale} } })); } catch {} void 0;`;
+    for (const tab of tabs.values()) {
+      if (tab.view && !tab.view.webContents.isDestroyed()) {
+        tab.view.webContents.executeJavaScript(scaleScript).catch(() => {});
+      }
+    }
   }
 }
 function visit(tab) {
@@ -744,6 +753,14 @@ async function configureSession() {
           if (focus && typeof focus.updateMetrics === 'function') {
             focus.updateMetrics(selection.id);
           }
+          const targetRes = getFullscreenResolution();
+          const tabScale = (focus && typeof focus.computeScale === 'function') ? focus.computeScale(selection.id, targetRes) : 1;
+          const scaleCode = `try { window.__prism_tab_scale = ${tabScale}; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: ${tabScale} } })); } catch {} void 0;`;
+          if (requestingFrame && typeof requestingFrame.executeJavaScript === 'function' && !requestingFrame.isDestroyed?.()) {
+            await requestingFrame.executeJavaScript(scaleCode).catch(() => {});
+          } else if (requestingTab?.view?.webContents && !requestingTab.view.webContents.isDestroyed()) {
+            await requestingTab.view.webContents.executeJavaScript(scaleCode).catch(() => {});
+          }
           const chosen = availableTabs.find(t => t.id === selection.id);
           const setCastState = (active) => {
             const script = `try { window.__prism_tab_cast_active = ${active}; window.dispatchEvent(new CustomEvent('__prism_tab_cast_change__', { detail: { active: ${active} } })); } catch {} void 0;`;
@@ -760,6 +777,12 @@ async function configureSession() {
               const endedSharedId = sharedTabId;
               sharedTabId = null;
               setCastState(false);
+              const resetScript = `try { window.__prism_tab_scale = 1; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: 1 } })); } catch {} void 0;`;
+              for (const tab of tabs.values()) {
+                if (tab.view && !tab.view.webContents.isDestroyed()) {
+                  tab.view.webContents.executeJavaScript(resetScript).catch(() => {});
+                }
+              }
               layout();
               if (focus && typeof focus.updateMetrics === 'function') {
                 focus.updateMetrics(endedSharedId);
@@ -784,6 +807,12 @@ async function configureSession() {
           toast(`Sharing tab "${chosen?.title || 'Tab'}" with ${requestingOrigin || 'site'}.`);
         } else if (selection.type === 'screen') {
           sharedTabId = null;
+          const resetCode = `try { window.__prism_tab_scale = 1; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: 1 } })); } catch {} void 0;`;
+          if (requestingFrame && typeof requestingFrame.executeJavaScript === 'function' && !requestingFrame.isDestroyed?.()) {
+            await requestingFrame.executeJavaScript(resetCode).catch(() => {});
+          } else if (requestingTab?.view?.webContents && !requestingTab.view.webContents.isDestroyed()) {
+            await requestingTab.view.webContents.executeJavaScript(resetCode).catch(() => {});
+          }
           layout();
           const chosenScreen = screens.find(s => s.id === selection.id) || screens[0];
           toast(`Sharing screen "${chosenScreen?.name || 'Screen'}" with ${requestingOrigin || 'site'}.`);

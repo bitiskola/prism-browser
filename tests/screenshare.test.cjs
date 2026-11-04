@@ -349,3 +349,144 @@ test('screenshare track ended listener logs __prism_screenshare_ended__ for clea
   for (const fn of trackListeners.get('ended')) fn();
   assert.ok(consoleLogs.includes('__prism_screenshare_ended__'), 'emitted screenshare ended log');
 });
+
+test('screenshare WebCodecs crop/scale pipeline transforms scaled down tab video without blank margins', async () => {
+  const vm = require('node:vm');
+  const { buildFocusScript } = require('../electron/focus.cjs');
+
+  const listeners = new Map();
+  const document = Object.create({ hasFocus() { return false; } });
+  document.location = { href: 'https://testsite.example/call' };
+
+  class MockMediaStreamTrack {
+    constructor() {
+      this.readyState = 'live';
+      this.enabled = true;
+      this.listeners = new Map();
+    }
+    getSettings() { return { displaySurface: 'browser', width: 1536, height: 960 }; }
+    getCapabilities() { return { displaySurface: 'browser' }; }
+    get label() { return 'Google Chrome Tab'; }
+    stop() { this.readyState = 'ended'; }
+    addEventListener(type, fn) {
+      const set = this.listeners.get(type) || new Set();
+      set.add(fn);
+      this.listeners.set(type, set);
+    }
+  }
+
+  class MockStream {
+    constructor(tracks = []) {
+      this._tracks = [...tracks];
+    }
+    getVideoTracks() { return [...this._tracks]; }
+    getTracks() { return [...this._tracks]; }
+    removeTrack(track) { this._tracks = this._tracks.filter(t => t !== track); }
+    addTrack(track) { this._tracks.push(track); }
+  }
+
+  class MockVideoFrame {
+    constructor(source, init = {}) {
+      this.source = source;
+      this.visibleRect = init.visibleRect || { x: 0, y: 0, width: source.displayWidth, height: source.displayHeight };
+      this.displayWidth = init.displayWidth || source.displayWidth;
+      this.displayHeight = init.displayHeight || source.displayHeight;
+      this.codedWidth = source.codedWidth || 1536;
+      this.codedHeight = source.codedHeight || 960;
+      this.closed = false;
+    }
+    close() { this.closed = true; }
+  }
+
+  let capturedTransformer = null;
+  class MockTransformStream {
+    constructor(transformer) {
+      capturedTransformer = transformer;
+      this.readable = {
+        pipeTo: async (writable) => {}
+      };
+      this.writable = {};
+    }
+  }
+
+  class MockMediaStreamTrackProcessor {
+    constructor({ track }) {
+      this.track = track;
+      this.readable = {
+        pipeThrough: (transform) => transform.readable
+      };
+    }
+  }
+
+  class MockMediaStreamTrackGenerator extends MockMediaStreamTrack {
+    constructor({ kind }) {
+      super();
+      this.kind = kind;
+      this.writable = {};
+    }
+  }
+
+  const origTrack = new MockMediaStreamTrack();
+  const origStream = new MockStream([origTrack]);
+  const originalGetDisplayMedia = async () => origStream;
+
+  const window = {
+    addEventListener(type, fn) { const set = listeners.get(type) || new Set(); set.add(fn); listeners.set(type, set); },
+    removeEventListener(type, fn) { listeners.get(type)?.delete(fn); },
+    MediaStreamTrackProcessor: MockMediaStreamTrackProcessor,
+    MediaStreamTrackGenerator: MockMediaStreamTrackGenerator,
+    VideoFrame: MockVideoFrame,
+    TransformStream: MockTransformStream,
+    __prism_report_display_surface: 'browser',
+    __prism_tab_scale: 0.825
+  };
+  const navigator = {
+    mediaDevices: {
+      getDisplayMedia: originalGetDisplayMedia
+    }
+  };
+
+  const context = vm.createContext({
+    document,
+    window,
+    navigator,
+    URL,
+    DOMException,
+    MediaStreamTrackProcessor: MockMediaStreamTrackProcessor,
+    MediaStreamTrackGenerator: MockMediaStreamTrackGenerator,
+    VideoFrame: MockVideoFrame,
+    TransformStream: MockTransformStream
+  });
+  const rules = [{ host: 'testsite.example', focus: true }];
+
+  vm.runInContext(buildFocusScript(rules), context);
+
+  const stream = await context.navigator.mediaDevices.getDisplayMedia();
+  const videoTracks = stream.getVideoTracks();
+  assert.equal(videoTracks.length, 1);
+  const transformedTrack = videoTracks[0];
+  assert.ok(transformedTrack instanceof MockMediaStreamTrackGenerator);
+  assert.equal(transformedTrack.getSettings().displaySurface, 'browser');
+
+  // Verify transformer crops frame according to scale and restores full display dimensions
+  assert.ok(capturedTransformer, 'transformer was created');
+  const enqueued = [];
+  const fakeController = {
+    enqueue(item) { enqueued.push(item); }
+  };
+  const inputFrame = new MockVideoFrame({
+    displayWidth: 1536,
+    displayHeight: 960,
+    codedWidth: 1536,
+    codedHeight: 960
+  });
+
+  await capturedTransformer.transform(inputFrame, fakeController);
+  assert.equal(enqueued.length, 1);
+  const outFrame = enqueued[0];
+  assert.equal(outFrame.displayWidth, 1536);
+  assert.equal(outFrame.displayHeight, 960);
+  assert.equal(outFrame.visibleRect.width, Math.round(1536 * 0.825));
+  assert.equal(outFrame.visibleRect.height, Math.round(960 * 0.825));
+  assert.equal(inputFrame.closed, true);
+});

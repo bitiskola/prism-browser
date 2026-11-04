@@ -897,10 +897,82 @@ function patchDocument(rules, spoofOptions = {}) {
         const stream = await origGetDisplayMedia(cleanConstraints);
         try {
           const targetSurface = window.__prism_report_display_surface;
+          const origTracks = (typeof stream.getVideoTracks === 'function') ? stream.getVideoTracks() : [];
           if (targetSurface && (targetSurface === 'monitor' || targetSurface === 'browser')) {
-            const tracks = (typeof stream.getVideoTracks === 'function') ? stream.getVideoTracks() : [];
-            for (const track of tracks) {
+            for (const track of origTracks) {
               patchTrack(track, targetSurface);
+            }
+          }
+
+          if (typeof MediaStreamTrackProcessor !== 'undefined' && typeof MediaStreamTrackGenerator !== 'undefined' && typeof VideoFrame !== 'undefined') {
+            const videoTrack = origTracks[0];
+            if (videoTrack) {
+              try {
+                const processor = new MediaStreamTrackProcessor({ track: videoTrack });
+                const generator = new MediaStreamTrackGenerator({ kind: 'video' });
+
+                const transformer = new TransformStream({
+                  async transform(frame, controller) {
+                    try {
+                      const scale = (typeof window.__prism_tab_scale === 'number' && window.__prism_tab_scale > 0)
+                        ? window.__prism_tab_scale
+                        : 1;
+                      if (scale < 0.999) {
+                        const srcW = frame.visibleRect ? frame.visibleRect.width : frame.displayWidth;
+                        const srcH = frame.visibleRect ? frame.visibleRect.height : frame.displayHeight;
+                        const subW = Math.max(1, Math.min(frame.codedWidth, Math.round(srcW * scale)));
+                        const subH = Math.max(1, Math.min(frame.codedHeight, Math.round(srcH * scale)));
+                        const cropped = new VideoFrame(frame, {
+                          visibleRect: { x: 0, y: 0, width: subW, height: subH },
+                          displayWidth: frame.displayWidth,
+                          displayHeight: frame.displayHeight
+                        });
+                        controller.enqueue(cropped);
+                        frame.close();
+                      } else {
+                        controller.enqueue(frame);
+                      }
+                    } catch {
+                      controller.enqueue(frame);
+                    }
+                  }
+                });
+
+                processor.readable.pipeThrough(transformer).pipeTo(generator.writable).catch(() => {});
+
+                const origStop = (typeof generator.stop === 'function') ? generator.stop.bind(generator) : null;
+                generator.stop = function stop() {
+                  try { videoTrack.stop(); } catch {}
+                  if (origStop) origStop();
+                };
+                videoTrack.addEventListener('ended', () => {
+                  try { generator.stop(); } catch {}
+                }, { once: true });
+
+                generator.getSettings = function getSettings() {
+                  return (typeof videoTrack.getSettings === 'function') ? videoTrack.getSettings() : {};
+                };
+                generator.getCapabilities = function getCapabilities() {
+                  return (typeof videoTrack.getCapabilities === 'function') ? videoTrack.getCapabilities() : {};
+                };
+                try {
+                  Object.defineProperty(generator, 'label', {
+                    get: () => videoTrack.label,
+                    configurable: true
+                  });
+                } catch {}
+
+                if (targetSurface && (targetSurface === 'monitor' || targetSurface === 'browser')) {
+                  patchTrack(generator, targetSurface);
+                }
+
+                if (typeof stream.removeTrack === 'function' && typeof stream.addTrack === 'function') {
+                  stream.removeTrack(videoTrack);
+                  stream.addTrack(generator);
+                }
+              } catch (cropErr) {
+                console.warn('Failed to wrap tab screencast:', cropErr);
+              }
             }
           }
           const allTracks = (typeof stream.getVideoTracks === 'function') ? stream.getVideoTracks() : [];
@@ -1292,9 +1364,8 @@ function buildFocusScript(rules, spoofOptions = {}) {
 }
 
 class FocusController {
-  constructor({ getRules, getSpoofOptions = () => ({}), getTargetResolution = () => ({ width: 1920, height: 1080 }), getViewBounds = () => ({ width: 0, height: 0 }), isTabShared = () => false, getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
+  constructor({ getRules, getSpoofOptions = () => ({}), getTargetResolution = () => ({ width: 1920, height: 1080 }), getViewBounds = () => ({ width: 0, height: 0 }), getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
     this.getViewBounds = getViewBounds;
-    this.isTabShared = isTabShared;
     this.getRules = getRules;
     this.getSpoofOptions = getSpoofOptions;
     this.getTargetResolution = getTargetResolution;
@@ -1306,9 +1377,6 @@ class FocusController {
   }
 
   computeScale(tabId, targetRes) {
-    if (typeof this.isTabShared === 'function' && this.isTabShared(tabId)) {
-      return 1;
-    }
     if (typeof this.getViewBounds !== 'function') return 1;
     const bounds = this.getViewBounds(tabId);
     if (!bounds || !bounds.width || !bounds.height || !targetRes || !targetRes.width || !targetRes.height) return 1;

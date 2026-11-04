@@ -599,17 +599,7 @@ test('FocusController scales view metrics down to fit non-fullscreen view withou
   viewBounds = { width: 2560, height: 1440 };
   assert.equal(controller.computeScale('tab-1', { width: 1920, height: 1080 }), 1);
 
-  // When tab is being shared in a screencast, scale returns 1 so full resolution canvas is captured without blank margins
-  let sharedId = 'tab-1';
-  const sharedController = new FocusController({
-    getRules: () => [{ host: 'exam.test', focus: true }],
-    getSpoofOptions: () => ({ fullscreen: true }),
-    getTargetResolution: () => ({ width: 1920, height: 1080 }),
-    isTabShared: id => id === sharedId,
-    getViewBounds: () => ({ width: 960, height: 540 })
-  });
-  assert.equal(sharedController.computeScale('tab-1', { width: 1920, height: 1080 }), 1);
-  assert.equal(sharedController.computeScale('tab-2', { width: 1920, height: 1080 }), 0.5);
+
 });
 
 test('layout centers non-fullscreen webview bounds preserving target resolution aspect ratio', () => {
