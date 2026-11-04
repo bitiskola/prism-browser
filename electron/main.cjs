@@ -289,9 +289,24 @@ function layout() {
       if (isFull) {
         tab.view.setBounds({ x: 0, y: 0, width, height });
       } else {
-        const x = Math.max(0, Math.min(width, Math.round(viewport.x)));
-        const y = Math.max(0, Math.min(height, Math.round(viewport.y)));
-        tab.view.setBounds({ x, y, width: Math.max(0, Math.min(width - x, Math.round(viewport.width))), height: Math.max(0, Math.min(height - y, Math.round(viewport.height))) });
+        const availX = Math.max(0, Math.min(width, Math.round(viewport.x)));
+        const availY = Math.max(0, Math.min(height, Math.round(viewport.y)));
+        const availW = Math.max(0, Math.min(width - availX, Math.round(viewport.width)));
+        const availH = Math.max(0, Math.min(height - availY, Math.round(viewport.height)));
+        const shouldFitAspect = Boolean(tab.spoofOnLoad && data.spoof?.fullscreen !== false) || isShared;
+        if (shouldFitAspect) {
+          const targetRes = getFullscreenResolution();
+          const targetW = targetRes?.width || 1920;
+          const targetH = targetRes?.height || 1080;
+          const scale = Math.min(availW / targetW, availH / targetH);
+          const fitW = Math.max(1, Math.round(targetW * scale));
+          const fitH = Math.max(1, Math.round(targetH * scale));
+          const offsetX = Math.round((availW - fitW) / 2);
+          const offsetY = Math.round((availH - fitH) / 2);
+          tab.view.setBounds({ x: availX + offsetX, y: availY + offsetY, width: fitW, height: fitH });
+        } else {
+          tab.view.setBounds({ x: availX, y: availY, width: availW, height: availH });
+        }
       }
       if (tab.spoofOnLoad && data.spoof?.fullscreen !== false) {
         focus.updateMetrics(tab.id);

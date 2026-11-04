@@ -599,3 +599,39 @@ test('FocusController scales view metrics down to fit non-fullscreen view withou
   viewBounds = { width: 2560, height: 1440 };
   assert.equal(controller.computeScale('tab-1', { width: 1920, height: 1080 }), 1);
 });
+
+test('layout centers non-fullscreen webview bounds preserving target resolution aspect ratio', () => {
+  function computeBounds(viewport, targetRes, spoofFullscreen) {
+    const availX = Math.max(0, Math.round(viewport.x));
+    const availY = Math.max(0, Math.round(viewport.y));
+    const availW = Math.max(0, Math.round(viewport.width));
+    const availH = Math.max(0, Math.round(viewport.height));
+    if (spoofFullscreen) {
+      const targetW = targetRes?.width || 1920;
+      const targetH = targetRes?.height || 1080;
+      const scale = Math.min(availW / targetW, availH / targetH);
+      const fitW = Math.max(1, Math.round(targetW * scale));
+      const fitH = Math.max(1, Math.round(targetH * scale));
+      const offsetX = Math.round((availW - fitW) / 2);
+      const offsetY = Math.round((availH - fitH) / 2);
+      return { x: availX + offsetX, y: availY + offsetY, width: fitW, height: fitH };
+    }
+    return { x: availX, y: availY, width: availW, height: availH };
+  }
+
+  const targetRes = { width: 1536, height: 960 }; // 1.6 aspect ratio
+  const viewport = { x: 50, y: 100, width: 1800, height: 900 };
+
+  const boundsSpoofed = computeBounds(viewport, targetRes, true);
+  assert.equal(boundsSpoofed.height, 900);
+  assert.equal(boundsSpoofed.width, 1440); // 900 * 1.6
+  assert.equal(boundsSpoofed.x, 50 + (1800 - 1440) / 2); // exactly centered horizontally: 50 + 180 = 230
+  assert.equal(boundsSpoofed.y, 100); // 0 vertical offset
+
+  // When spoofing is off, standard fill bounds are used
+  const boundsNormal = computeBounds(viewport, targetRes, false);
+  assert.equal(boundsNormal.x, 50);
+  assert.equal(boundsNormal.y, 100);
+  assert.equal(boundsNormal.width, 1800);
+  assert.equal(boundsNormal.height, 900);
+});
