@@ -550,3 +550,68 @@ test('tab screenshare resolution and aspect ratio only apply when spoof mode is 
   const scaleOn = computeTabScale(true, mockFocus, 'tab-1', targetRes);
   assert.equal(scaleOn, 1200 / 1920, 'scale is computed when spoof mode is on');
 });
+
+test('tab screenshare dispatches off-screen cursor and mouseLeave on exit to prevent stuck corner artifact', () => {
+  const events = [];
+  const mockWebContents = {
+    isDestroyed: () => false,
+    sendInputEvent(evt) {
+      events.push(evt);
+    }
+  };
+
+  let lastSharedInside = true;
+  let offScreenDispatchesRemaining = 0;
+
+  function onCursorPoll(cursorPoint, sharedScreenRect, isFocused) {
+    const isSharedInside = (
+      cursorPoint.x >= sharedScreenRect.x &&
+      cursorPoint.x < sharedScreenRect.x + sharedScreenRect.width &&
+      cursorPoint.y >= sharedScreenRect.y &&
+      cursorPoint.y < sharedScreenRect.y + sharedScreenRect.height &&
+      isFocused
+    );
+
+    if (!isSharedInside) {
+      if (lastSharedInside) {
+        lastSharedInside = false;
+        offScreenDispatchesRemaining = 2;
+      }
+      if (offScreenDispatchesRemaining > 0) {
+        offScreenDispatchesRemaining--;
+        try {
+          mockWebContents.sendInputEvent({ type: 'mouseMove', x: -10000, y: -10000 });
+          mockWebContents.sendInputEvent({ type: 'mouseLeave', x: -10000, y: -10000 });
+        } catch {}
+      }
+    } else {
+      lastSharedInside = true;
+      offScreenDispatchesRemaining = 0;
+    }
+    return isSharedInside;
+  }
+
+  const rect = { x: 100, y: 100, width: 800, height: 600 };
+
+  // 1. Cursor moves inside view
+  assert.equal(onCursorPoll({ x: 200, y: 200 }, rect, true), true);
+  assert.equal(events.length, 0, 'no off-screen dispatch while inside');
+
+  // 2. Cursor exits view boundary (e.g. into toolbar at x: 200, y: 50)
+  assert.equal(onCursorPoll({ x: 200, y: 50 }, rect, true), false);
+  assert.equal(events.length, 2, 'dispatched off-screen move and mouseLeave on exit');
+  assert.deepEqual(events[0], { type: 'mouseMove', x: -10000, y: -10000 });
+  assert.deepEqual(events[1], { type: 'mouseLeave', x: -10000, y: -10000 });
+
+  // 3. Second poll while still outside: sends safety follow-up
+  assert.equal(onCursorPoll({ x: 200, y: 50 }, rect, true), false);
+  assert.equal(events.length, 4);
+
+  // 4. Subsequent polls while outside: remaining count is 0, no spam
+  assert.equal(onCursorPoll({ x: 200, y: 50 }, rect, true), false);
+  assert.equal(events.length, 4);
+
+  // 5. Cursor re-enters: resets state
+  assert.equal(onCursorPoll({ x: 300, y: 300 }, rect, true), true);
+  assert.equal(events.length, 4);
+});

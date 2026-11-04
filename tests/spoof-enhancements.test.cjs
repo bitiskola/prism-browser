@@ -571,6 +571,24 @@ test('screenshare cursor containment parks pointer ~1cm from exit side during ta
   window.__prism_set_cursor_stuck(true, 500, 1070);
   assert.equal(pointerEl.style.display, 'block');
   assert.equal(pointerEl.style.transform, 'translate3d(500px, 1042px, 0)');
+
+  // Direct trigger with system cursor info (e.g. fetched from OS)
+  const mockSystemCursor = {
+    dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    width: 28,
+    height: 28,
+    xhot: 5,
+    yhot: 5
+  };
+  window.__prism_set_cursor_stuck(true, 500, 1070, mockSystemCursor);
+  assert.equal(pointerEl.style.display, 'block');
+  assert.ok(pointerEl.innerHTML.includes('<img src="data:image/png;base64,'), 'contains matching system cursor image');
+  
+ assert.equal(pointerEl.style.width, '28px');
+  assert.equal(pointerEl.style.height, '28px');
+  assert.equal(pointerEl.style.marginLeft, '-5px');
+  assert.equal(pointerEl.style.marginTop, '-5px');
+
   window.__prism_set_cursor_stuck(false);
   assert.equal(pointerEl.style.display, 'none');
 

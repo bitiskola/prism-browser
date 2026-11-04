@@ -15,6 +15,7 @@ const { ProxyController } = require('./proxy.cjs');
 const { AdblockController, normalizeAdblockSettings } = require('./adblock.cjs');
 const { ClipboardTyping } = require('./clipboard-typing.cjs');
 const { handleDisplayMediaSelection } = require('./screenshare.cjs');
+const { getSystemCursorInfo } = require('./cursor-theme.cjs');
 
 app.setName('Prism Browser');
 if (process.platform === 'linux') app.setDesktopName('prism-browser.desktop');
@@ -97,6 +98,8 @@ function getFullscreenResolution() {
 
 let cursorTrackingTimer = null;
 let lastStuckState = false;
+let lastSharedInside = true;
+let offScreenDispatchesRemaining = 0;
 
 function startCursorTracking() {
   if (cursorTrackingTimer) return;
@@ -104,8 +107,65 @@ function startCursorTracking() {
     try {
       if (!win || win.isDestroyed() || !win.isVisible()) return;
 
+      const cursorPoint = screen.getCursorScreenPoint();
+      const contentBounds = win.getContentBounds();
+
+      // Tab screensharing: prevent real cursor from freezing at view edges/corners in capture stream
+      const sharedTab = sharedTabId ? tabs.get(sharedTabId) : null;
+      if (sharedTab && sharedTab.view && !sharedTab.view.webContents.isDestroyed()) {
+        const sBounds = sharedTab.view.getBounds();
+        const sharedScreenRect = {
+          x: contentBounds.x + sBounds.x,
+          y: contentBounds.y + sBounds.y,
+          width: sBounds.width,
+          height: sBounds.height
+        };
+        const isSharedInside = (
+          cursorPoint.x >= sharedScreenRect.x &&
+          cursorPoint.x < sharedScreenRect.x + sharedScreenRect.width &&
+          cursorPoint.y >= sharedScreenRect.y &&
+          cursorPoint.y < sharedScreenRect.y + sharedScreenRect.height &&
+          win.isFocused()
+        );
+
+        if (!isSharedInside) {
+          if (lastSharedInside) {
+            lastSharedInside = false;
+            offScreenDispatchesRemaining = 2;
+          }
+          if (offScreenDispatchesRemaining > 0) {
+            offScreenDispatchesRemaining--;
+            try {
+              sharedTab.view.webContents.sendInputEvent({ type: 'mouseMove', x: -10000, y: -10000 });
+              sharedTab.view.webContents.sendInputEvent({ type: 'mouseLeave', x: -10000, y: -10000 });
+            } catch {}
+          }
+        } else {
+          lastSharedInside = true;
+          offScreenDispatchesRemaining = 0;
+        }
+      } else {
+        lastSharedInside = true;
+        offScreenDispatchesRemaining = 0;
+      }
+
       const optCursor = data.spoof?.screenshareCursor !== false;
-      if (!optCursor) {
+      let targetTab = null;
+      if (optCursor) {
+        if (sharedTabId && tabs.has(sharedTabId)) {
+          const candidate = tabs.get(sharedTabId);
+          if (candidate && candidate.spoofOnLoad && candidate.url !== 'about:blank') {
+            targetTab = candidate;
+          }
+        } else if (activeTabId && tabs.has(activeTabId)) {
+          const candidate = tabs.get(activeTabId);
+          if (candidate && candidate.spoofOnLoad && candidate.url !== 'about:blank') {
+            targetTab = candidate;
+          }
+        }
+      }
+
+      if (!targetTab || !targetTab.view || targetTab.view.webContents.isDestroyed()) {
         if (lastStuckState) {
           lastStuckState = false;
           for (const tab of tabs.values()) {
@@ -117,25 +177,6 @@ function startCursorTracking() {
         return;
       }
 
-      let targetTab = null;
-      if (sharedTabId && tabs.has(sharedTabId)) {
-        const candidate = tabs.get(sharedTabId);
-        if (candidate && candidate.spoofOnLoad && candidate.url !== 'about:blank') {
-          targetTab = candidate;
-        }
-      } else if (activeTabId && tabs.has(activeTabId)) {
-        const candidate = tabs.get(activeTabId);
-        if (candidate && candidate.spoofOnLoad && candidate.url !== 'about:blank') {
-          targetTab = candidate;
-        }
-      }
-
-      if (!targetTab || !targetTab.view || targetTab.view.webContents.isDestroyed()) {
-        if (lastStuckState) lastStuckState = false;
-        return;
-      }
-
-      const contentBounds = win.getContentBounds();
       const viewBounds = targetTab.view.getBounds();
       const viewScreenRect = {
         x: contentBounds.x + viewBounds.x,
@@ -144,7 +185,6 @@ function startCursorTracking() {
         height: viewBounds.height
       };
 
-      const cursorPoint = screen.getCursorScreenPoint();
       const isInside = (
         cursorPoint.x >= viewScreenRect.x &&
         cursorPoint.x < viewScreenRect.x + viewScreenRect.width &&
@@ -159,12 +199,13 @@ function startCursorTracking() {
         const scale = focus.computeScale ? focus.computeScale(targetTab.id, getFullscreenResolution()) : 1;
         const relX = Math.round((cursorPoint.x - viewScreenRect.x) / (scale || 1));
         const relY = Math.round((cursorPoint.y - viewScreenRect.y) / (scale || 1));
+        const sysCursor = getSystemCursorInfo();
         targetTab.view.webContents.executeJavaScript(
-          'try { window.__prism_set_cursor_stuck?.(' + isOutside + ', ' + relX + ', ' + relY + '); } catch {} void 0;'
+          'try { window.__prism_set_cursor_stuck?.(' + isOutside + ', ' + relX + ', ' + relY + ', ' + JSON.stringify(sysCursor) + '); } catch {} void 0;'
         ).catch(() => {});
       }
     } catch {}
-  }, 35);
+  }, 25);
 }
 
 function stopCursorTracking() {
@@ -176,6 +217,7 @@ function stopCursorTracking() {
 
 const focus = new FocusController({ getRules: () => data.rules,
   getTargetResolution: () => getFullscreenResolution(),
+  getSystemCursor: () => getSystemCursorInfo(),
   getViewBounds: id => {
     const tab = tabs.get(id);
     if (!tab || !tab.view) return { width: 0, height: 0 };
@@ -776,6 +818,8 @@ async function configureSession() {
 
         if (selection.type === 'tab') {
           sharedTabId = selection.id;
+          lastSharedInside = true;
+          offScreenDispatchesRemaining = 0;
           layout();
           const chosen = availableTabs.find(t => t.id === selection.id);
           const isChosenSpoofed = Boolean(chosen && chosen.spoofOnLoad && data.spoof?.fullscreen !== false);
@@ -804,6 +848,8 @@ async function configureSession() {
             if (sharedTabId === selection.id) {
               const endedSharedId = sharedTabId;
               sharedTabId = null;
+              lastSharedInside = true;
+              offScreenDispatchesRemaining = 0;
               setCastState(false);
               const resetScript = `try { window.__prism_tab_scale = 1; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: 1 } })); } catch {} void 0;`;
               for (const tab of tabs.values()) {

@@ -1041,8 +1041,17 @@ function patchDocument(rules, spoofOptions = {}) {
         const pointer = document.createElement('div');
         pointer.id = '__prism_cast_pointer__';
         pointer.className = 'prism-cast-pointer';
-        pointer.style.cssText = 'position:fixed;top:0;left:0;width:24px;height:24px;margin-left:-4px;margin-top:-2px;pointer-events:none !important;user-select:none !important;z-index:2147483647 !important;filter:drop-shadow(1px 2px 2px rgba(0,0,0,0.5));display:none;';
-        pointer.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 2 L4 20 L8.5 15.5 L12.5 23 L15.5 21.5 L11.5 14 L17.5 14 Z" fill="#FFFFFF" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+        const curInfo = spoofOptions.systemCursor;
+        const curW = (curInfo && typeof curInfo.width === 'number') ? curInfo.width : 24;
+        const curH = (curInfo && typeof curInfo.height === 'number') ? curInfo.height : 24;
+        const curXHot = (curInfo && typeof curInfo.xhot === 'number') ? curInfo.xhot : 4;
+        const curYHot = (curInfo && typeof curInfo.yhot === 'number') ? curInfo.yhot : 4;
+        pointer.style.cssText = 'position:fixed;top:0;left:0;width:' + curW + 'px;height:' + curH + 'px;margin-left:-' + curXHot + 'px;margin-top:-' + curYHot + 'px;pointer-events:none !important;user-select:none !important;z-index:2147483647 !important;filter:drop-shadow(1px 2px 2px rgba(0,0,0,0.4));display:none;';
+        if (curInfo && curInfo.dataUrl) {
+          pointer.innerHTML = '<img src="' + curInfo.dataUrl + '" style="width:' + curW + 'px;height:' + curH + 'px;display:block;pointer-events:none;" draggable="false" />';
+        } else {
+          pointer.innerHTML = '<svg width="' + curW + '" height="' + curH + '" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 2 L4 20 L8.5 15.5 L12.5 23 L15.5 21.5 L11.5 14 L17.5 14 Z" fill="#FFFFFF" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+        }
 
         cursorHost.appendChild(pointer);
         parent.appendChild(cursorHost);
@@ -1116,7 +1125,7 @@ function patchDocument(rules, spoofOptions = {}) {
     };
 
     if (typeof window !== 'undefined') {
-      window.__prism_set_cursor_stuck = function(stuck, relX, relY) {
+      window.__prism_set_cursor_stuck = function(stuck, relX, relY, customCursor) {
         if (!stuck) {
           hideOverlay();
           return;
@@ -1124,6 +1133,28 @@ function patchDocument(rules, spoofOptions = {}) {
         if (typeof relX === 'number' && typeof relY === 'number') {
           lastX = relX;
           lastY = relY;
+        }
+        if (customCursor && typeof customCursor === 'object' && customCursor.dataUrl) {
+          const el = ensureOverlayElement();
+          if (el) {
+            const w = customCursor.width || 24;
+            const h = customCursor.height || 24;
+            const xh = typeof customCursor.xhot === 'number' ? customCursor.xhot : 4;
+            const yh = typeof customCursor.yhot === 'number' ? customCursor.yhot : 4;
+            try {
+              if (typeof el.style.setProperty === 'function') {
+                el.style.setProperty('width', w + 'px');
+                el.style.setProperty('height', h + 'px');
+              }
+              Object.defineProperty(el.style, 'width', { value: w + 'px', writable: true, configurable: true, enumerable: true });
+              Object.defineProperty(el.style, 'height', { value: h + 'px', writable: true, configurable: true, enumerable: true });
+            } catch {}
+            el.style.width = w + 'px';
+            el.style.height = h + 'px';
+            el.style.marginLeft = -xh + 'px';
+            el.style.marginTop = -yh + 'px';
+            el.innerHTML = '<img src="' + customCursor.dataUrl + '" style="width:' + w + 'px;height:' + h + 'px;display:block;pointer-events:none;" draggable="false" />';
+          }
         }
         showStuckCursor();
       };
@@ -1369,12 +1400,13 @@ function buildFocusScript(rules, spoofOptions = {}) {
 }
 
 class FocusController {
-  constructor({ getRules, getSpoofOptions = () => ({}), getTargetResolution = () => ({ width: 1920, height: 1080 }), getViewBounds = () => ({ width: 0, height: 0 }), onScaleApplied = () => {}, getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
+  constructor({ getRules, getSpoofOptions = () => ({}), getTargetResolution = () => ({ width: 1920, height: 1080 }), getSystemCursor = () => null, getViewBounds = () => ({ width: 0, height: 0 }), onScaleApplied = () => {}, getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
     this.onScaleApplied = onScaleApplied;
     this.getViewBounds = getViewBounds;
     this.getRules = getRules;
     this.getSpoofOptions = getSpoofOptions;
     this.getTargetResolution = getTargetResolution;
+    this.getSystemCursor = getSystemCursor;
     this.getFrameSessions = getFrameSessions;
     this.onError = onError;
     this.onStatus = onStatus;
@@ -1667,7 +1699,8 @@ class FocusController {
         const rawSpoofOptions = typeof this.getSpoofOptions === 'function' ? this.getSpoofOptions() : {};
         const hasSpoof = Object.keys(rawSpoofOptions).length > 0;
         const targetRes = typeof this.getTargetResolution === 'function' ? this.getTargetResolution() : { width: 1920, height: 1080 };
-        const spoofOptions = hasSpoof ? { ...rawSpoofOptions, targetResolution: targetRes } : rawSpoofOptions;
+        const sysCursor = typeof this.getSystemCursor === 'function' ? this.getSystemCursor() : null;
+        const spoofOptions = hasSpoof ? { ...rawSpoofOptions, targetResolution: targetRes, systemCursor: sysCursor } : rawSpoofOptions;
         const normalized = focusRules(rules);
         const source = buildFocusScript(rules, spoofOptions);
         const signature = JSON.stringify({ rules: normalized, spoof: spoofOptions });
