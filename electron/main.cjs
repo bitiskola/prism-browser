@@ -119,7 +119,10 @@ function startCursorTracking() {
 
       let targetTab = null;
       if (sharedTabId && tabs.has(sharedTabId)) {
-        targetTab = tabs.get(sharedTabId);
+        const candidate = tabs.get(sharedTabId);
+        if (candidate && candidate.spoofOnLoad && candidate.url !== 'about:blank') {
+          targetTab = candidate;
+        }
       } else if (activeTabId && tabs.has(activeTabId)) {
         const candidate = tabs.get(activeTabId);
         if (candidate && candidate.spoofOnLoad && candidate.url !== 'about:blank') {
@@ -180,9 +183,12 @@ const focus = new FocusController({ getRules: () => data.rules,
   },
   onScaleApplied: (tabId, scale) => {
     if (tabId === sharedTabId) {
-      if (lastBroadcastScale !== scale) {
-        lastBroadcastScale = scale;
-        const scaleScript = `try { window.__prism_tab_scale = ${scale}; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: ${scale} } })); } catch {} void 0;`;
+      const sharedTab = tabs.get(sharedTabId);
+      const isSharedSpoofed = Boolean(sharedTab && sharedTab.spoofOnLoad && data.spoof?.fullscreen !== false);
+      const effectiveScale = isSharedSpoofed ? scale : 1;
+      if (lastBroadcastScale !== effectiveScale) {
+        lastBroadcastScale = effectiveScale;
+        const scaleScript = `try { window.__prism_tab_scale = ${effectiveScale}; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: ${effectiveScale} } })); } catch {} void 0;`;
         for (const tab of tabs.values()) {
           if (tab.view && !tab.view.webContents.isDestroyed()) {
             tab.view.webContents.executeJavaScript(scaleScript).catch(() => {});
@@ -321,7 +327,7 @@ function layout() {
         const availY = Math.max(0, Math.min(height, Math.round(viewport.y)));
         const availW = Math.max(0, Math.min(width - availX, Math.round(viewport.width)));
         const availH = Math.max(0, Math.min(height - availY, Math.round(viewport.height)));
-        const shouldFitAspect = Boolean(tab.spoofOnLoad && data.spoof?.fullscreen !== false) || isShared;
+        const shouldFitAspect = Boolean(tab.spoofOnLoad && data.spoof?.fullscreen !== false);
         if (shouldFitAspect) {
           const targetRes = getFullscreenResolution();
           const targetW = targetRes?.width || 1920;
@@ -771,18 +777,19 @@ async function configureSession() {
         if (selection.type === 'tab') {
           sharedTabId = selection.id;
           layout();
-          if (focus && typeof focus.updateMetrics === 'function') {
+          const chosen = availableTabs.find(t => t.id === selection.id);
+          const isChosenSpoofed = Boolean(chosen && chosen.spoofOnLoad && data.spoof?.fullscreen !== false);
+          if (isChosenSpoofed && focus && typeof focus.updateMetrics === 'function') {
             focus.updateMetrics(selection.id);
           }
           const targetRes = getFullscreenResolution();
-          const tabScale = (focus && typeof focus.computeScale === 'function') ? focus.computeScale(selection.id, targetRes) : 1;
+          const tabScale = (isChosenSpoofed && focus && typeof focus.computeScale === 'function') ? focus.computeScale(selection.id, targetRes) : 1;
           const scaleCode = `try { window.__prism_tab_scale = ${tabScale}; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: ${tabScale} } })); } catch {} void 0;`;
           if (requestingFrame && typeof requestingFrame.executeJavaScript === 'function' && !requestingFrame.isDestroyed?.()) {
             await requestingFrame.executeJavaScript(scaleCode).catch(() => {});
           } else if (requestingTab?.view?.webContents && !requestingTab.view.webContents.isDestroyed()) {
             await requestingTab.view.webContents.executeJavaScript(scaleCode).catch(() => {});
           }
-          const chosen = availableTabs.find(t => t.id === selection.id);
           const setCastState = (active) => {
             const script = `try { window.__prism_tab_cast_active = ${active}; window.dispatchEvent(new CustomEvent('__prism_tab_cast_change__', { detail: { active: ${active} } })); } catch {} void 0;`;
             if (chosen && !chosen.view.webContents.isDestroyed()) {
@@ -805,7 +812,8 @@ async function configureSession() {
                 }
               }
               layout();
-              if (focus && typeof focus.updateMetrics === 'function') {
+              const endedTab = tabs.get(endedSharedId);
+              if (endedTab?.spoofOnLoad && data.spoof?.fullscreen !== false && focus && typeof focus.updateMetrics === 'function') {
                 focus.updateMetrics(endedSharedId);
               }
             }
@@ -960,6 +968,7 @@ async function action(name, payload = {}) {
         }
       }
       await Promise.allSettled(updates);
+      layout();
       sendState();
       break;
     }
@@ -1020,6 +1029,7 @@ async function action(name, payload = {}) {
       // renderer must not hold the active tab's toolbar request open.
       sendState();
       await updates.get(tab?.id);
+      layout();
       break;
     }
     case 'focus-retry': {

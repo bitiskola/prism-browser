@@ -503,3 +503,50 @@ test('screenshare WebCodecs crop/scale pipeline transforms scaled down tab video
   const transitionFrame = enqueued[1];
   assert.equal(transitionFrame, nextFrame, 'fullscreen frame is passed directly without zoom effect');
 });
+
+test('tab screenshare resolution and aspect ratio only apply when spoof mode is active for the tab', () => {
+  function computeLayoutBounds(viewport, isSpoofed, targetRes) {
+    const availX = Math.max(0, Math.round(viewport.x));
+    const availY = Math.max(0, Math.round(viewport.y));
+    const availW = Math.max(0, Math.round(viewport.width));
+    const availH = Math.max(0, Math.round(viewport.height));
+    const shouldFitAspect = Boolean(isSpoofed);
+    if (shouldFitAspect) {
+      const targetW = targetRes?.width || 1920;
+      const targetH = targetRes?.height || 1080;
+      const scale = Math.min(availW / targetW, availH / targetH);
+      const fitW = Math.max(1, Math.round(targetW * scale));
+      const fitH = Math.max(1, Math.round(targetH * scale));
+      const offsetX = Math.round((availW - fitW) / 2);
+      const offsetY = Math.round((availH - fitH) / 2);
+      return { x: availX + offsetX, y: availY + offsetY, width: fitW, height: fitH, scale };
+    }
+    return { x: availX, y: availY, width: availW, height: availH, scale: 1 };
+  }
+
+  function computeTabScale(isTabSpoofed, focusController, tabId, targetRes) {
+    return (isTabSpoofed && focusController && typeof focusController.computeScale === 'function')
+      ? focusController.computeScale(tabId, targetRes)
+      : 1;
+  }
+
+  const viewport = { x: 0, y: 72, width: 1200, height: 728 };
+  const targetRes = { width: 1920, height: 1080 };
+  const mockFocus = {
+    computeScale(id, res) {
+      return 1200 / res.width;
+    }
+  };
+
+  // Scenario 1: Tab screenshare with spoof mode completely OFF
+  const boundsOff = computeLayoutBounds(viewport, false, targetRes);
+  assert.deepEqual(boundsOff, { x: 0, y: 72, width: 1200, height: 728, scale: 1 });
+  const scaleOff = computeTabScale(false, mockFocus, 'tab-1', targetRes);
+  assert.equal(scaleOff, 1, 'scale is 1 when spoof mode is off');
+
+  // Scenario 2: Tab screenshare with spoof mode ON
+  const boundsOn = computeLayoutBounds(viewport, true, targetRes);
+  assert.notDeepEqual(boundsOn, { x: 0, y: 72, width: 1200, height: 728, scale: 1 });
+  const scaleOn = computeTabScale(true, mockFocus, 'tab-1', targetRes);
+  assert.equal(scaleOn, 1200 / 1920, 'scale is computed when spoof mode is on');
+});
