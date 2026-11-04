@@ -153,10 +153,11 @@ function startCursorTracking() {
       const isOutside = !isInside;
       if (isOutside !== lastStuckState) {
         lastStuckState = isOutside;
-        const relX = cursorPoint.x - viewScreenRect.x;
-        const relY = cursorPoint.y - viewScreenRect.y;
+        const scale = focus.computeScale ? focus.computeScale(targetTab.id, getFullscreenResolution()) : 1;
+        const relX = Math.round((cursorPoint.x - viewScreenRect.x) / (scale || 1));
+        const relY = Math.round((cursorPoint.y - viewScreenRect.y) / (scale || 1));
         targetTab.view.webContents.executeJavaScript(
-          'try { window.__prism_set_cursor_stuck?.(' + isOutside + ', ' + Math.round(relX) + ', ' + Math.round(relY) + '); } catch {} void 0;'
+          'try { window.__prism_set_cursor_stuck?.(' + isOutside + ', ' + relX + ', ' + relY + '); } catch {} void 0;'
         ).catch(() => {});
       }
     } catch {}
@@ -172,6 +173,11 @@ function stopCursorTracking() {
 
 const focus = new FocusController({ getRules: () => data.rules,
   getTargetResolution: () => getFullscreenResolution(),
+  getViewBounds: id => {
+    const tab = tabs.get(id);
+    if (!tab || !tab.view) return { width: 0, height: 0 };
+    return tab.view.getBounds();
+  },
   getSpoofOptions: () => data.spoof,
   getFrameSessions: id => monitor.getFrameSessions(id),
   onError: (error, id) => { const tab = tabs.get(id); if (tab) { tab.focusError = error.message; scheduleState(); } },
@@ -286,6 +292,9 @@ function layout() {
         const x = Math.max(0, Math.min(width, Math.round(viewport.x)));
         const y = Math.max(0, Math.min(height, Math.round(viewport.y)));
         tab.view.setBounds({ x, y, width: Math.max(0, Math.min(width - x, Math.round(viewport.width))), height: Math.max(0, Math.min(height - y, Math.round(viewport.height))) });
+      }
+      if (tab.spoofOnLoad && data.spoof?.fullscreen !== false) {
+        focus.updateMetrics(tab.id);
       }
     }
   }

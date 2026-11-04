@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { DEFAULT_PREFERENCES, normalizeSpoof, SUPPORTED_SPOOF_PLATFORMS, SUPPORTED_SPOOF_BROWSERS } = require('../electron/preferences.cjs');
-const { buildFocusScript, getChromeUserAgent, SPOOF_PLATFORMS, SPOOF_BROWSERS, getSpoofProfile } = require('../electron/focus.cjs');
+const { FocusController, buildFocusScript, getChromeUserAgent, SPOOF_PLATFORMS, SPOOF_BROWSERS, getSpoofProfile } = require('../electron/focus.cjs');
 
 test('DEFAULT_PREFERENCES includes spoof with all features enabled, platform win64 and browser chrome', () => {
   assert.ok(DEFAULT_PREFERENCES.spoof, 'spoof exists in DEFAULT_PREFERENCES');
@@ -324,7 +324,7 @@ test('FocusController setEmulation passes correct userAgent and userAgentMetadat
   assert.equal(metricsOverride.params.height, 1080);
   assert.equal(metricsOverride.params.screenWidth, 1920);
   assert.equal(metricsOverride.params.screenHeight, 1080);
-  assert.equal(metricsOverride.params.fitWindow, true);
+  assert.equal(metricsOverride.params.scale, 1);
   let override = sentCommands.find(c => c.method === 'Emulation.setUserAgentOverride');
   assert.ok(override, 'setUserAgentOverride command sent');
   assert.ok(override.params.userAgent.includes('Edg/153.0.0.0'), 'UA contains Edge 153');
@@ -577,4 +577,25 @@ test('screenshare cursor containment parks pointer ~1cm from exit side during ta
   // Disabling spoof mode cleans up host from DOM
   vm.runInContext(buildFocusScript([]), context);
   assert.equal(appendedHost, null, 'cursor host removed on disable');
+});
+
+test('FocusController scales view metrics down to fit non-fullscreen view without changing target resolution', () => {
+  let viewBounds = { width: 960, height: 540 };
+  const controller = new FocusController({
+    getRules: () => [{ host: 'exam.test', focus: true }],
+    getSpoofOptions: () => ({ fullscreen: true }),
+    getTargetResolution: () => ({ width: 1920, height: 1080 }),
+    getViewBounds: () => viewBounds
+  });
+
+  assert.equal(controller.computeScale('tab-1', { width: 1920, height: 1080 }), 0.5);
+
+  viewBounds = { width: 1200, height: 800 };
+  assert.equal(controller.computeScale('tab-1', { width: 1920, height: 1080 }), 1200 / 1920);
+
+  viewBounds = { width: 1920, height: 1080 };
+  assert.equal(controller.computeScale('tab-1', { width: 1920, height: 1080 }), 1);
+
+  viewBounds = { width: 2560, height: 1440 };
+  assert.equal(controller.computeScale('tab-1', { width: 1920, height: 1080 }), 1);
 });

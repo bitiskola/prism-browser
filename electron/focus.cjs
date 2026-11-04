@@ -1292,7 +1292,8 @@ function buildFocusScript(rules, spoofOptions = {}) {
 }
 
 class FocusController {
-  constructor({ getRules, getSpoofOptions = () => ({}), getTargetResolution = () => ({ width: 1920, height: 1080 }), getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
+  constructor({ getRules, getSpoofOptions = () => ({}), getTargetResolution = () => ({ width: 1920, height: 1080 }), getViewBounds = () => ({ width: 0, height: 0 }), getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
+    this.getViewBounds = getViewBounds;
     this.getRules = getRules;
     this.getSpoofOptions = getSpoofOptions;
     this.getTargetResolution = getTargetResolution;
@@ -1301,6 +1302,43 @@ class FocusController {
     this.onStatus = onStatus;
     this.executionTimeout = executionTimeout;
     this.tabs = new Map();
+  }
+
+  computeScale(tabId, targetRes) {
+    if (typeof this.getViewBounds !== 'function') return 1;
+    const bounds = this.getViewBounds(tabId);
+    if (!bounds || !bounds.width || !bounds.height || !targetRes || !targetRes.width || !targetRes.height) return 1;
+    const scale = Math.min(bounds.width / targetRes.width, bounds.height / targetRes.height);
+    if (!Number.isFinite(scale) || scale <= 0) return 1;
+    return Math.min(1, scale);
+  }
+
+  async updateMetrics(tabId) {
+    const state = this.tabs.get(tabId);
+    if (!state || state.closed || state.webContents.isDestroyed()) return;
+    if (!state.webContents.debugger.isAttached()) return;
+    const spoofOptions = typeof this.getSpoofOptions === 'function' ? this.getSpoofOptions() : {};
+    const optFullscreen = spoofOptions.fullscreen !== false;
+    if (!optFullscreen) return;
+    const targetRes = typeof this.getTargetResolution === 'function' ? this.getTargetResolution() : { width: 1920, height: 1080 };
+    const scale = this.computeScale(tabId, targetRes);
+    const deviceMetricsParams = {
+      width: targetRes.width,
+      height: targetRes.height,
+      deviceScaleFactor: 1,
+      mobile: false,
+      screenWidth: targetRes.width,
+      screenHeight: targetRes.height,
+      scale: scale
+    };
+    try {
+      await state.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', deviceMetricsParams);
+      for (const [id] of state.frameSessions) {
+        try {
+          await state.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', deviceMetricsParams, id);
+        } catch {}
+      }
+    } catch {}
   }
 
   async attach(webContents, tabId) {
@@ -1465,6 +1503,7 @@ class FocusController {
         }
         const optFullscreen = spoofOptions.fullscreen !== false;
         const targetRes = typeof this.getTargetResolution === 'function' ? this.getTargetResolution() : { width: 1920, height: 1080 };
+        const scale = this.computeScale(state.tabId, targetRes);
         const deviceMetricsParams = {
           width: targetRes.width,
           height: targetRes.height,
@@ -1472,7 +1511,7 @@ class FocusController {
           mobile: false,
           screenWidth: targetRes.width,
           screenHeight: targetRes.height,
-          fitWindow: true
+          scale: scale
         };
 
         const cdpCalls = [
