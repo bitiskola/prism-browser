@@ -263,6 +263,7 @@ function patchDocument(rules, spoofOptions = {}) {
   const optSelection = spoofOptions.selection !== false;
   const optScreenshare = spoofOptions.screenshare !== false;
   const optScreenshareCursor = spoofOptions.screenshareCursor !== false;
+  const optScreenshareHideSelection = spoofOptions.screenshareHideSelection !== false;
   const optOsPlatform = spoofOptions.osPlatform !== false;
   const targetPlatformKey = spoofOptions.platform || 'win64';
   const optBrowser = spoofOptions.browserIdentity !== false;
@@ -271,6 +272,7 @@ function patchDocument(rules, spoofOptions = {}) {
   let activeCastTracksCount = 0;
   let cursorHost = null;
   let cursorEl = null;
+  let selectionHideStyle = null;
 
   const descriptors = [];
   const listeners = [];
@@ -315,6 +317,15 @@ function patchDocument(rules, spoofOptions = {}) {
       cursorHost = null;
       cursorEl = null;
     }
+    if (selectionHideStyle) {
+      try {
+        if (typeof selectionHideStyle.remove === 'function') selectionHideStyle.remove();
+        else if (selectionHideStyle.parentNode && typeof selectionHideStyle.parentNode.removeChild === 'function') {
+          selectionHideStyle.parentNode.removeChild(selectionHideStyle);
+        }
+      } catch {}
+      selectionHideStyle = null;
+    }
     try { delete window.__prism_report_display_surface; } catch {}
     try { delete window.__prism_set_cursor_stuck; } catch {}
     try { delete window.__prism_tab_cast_active; } catch {} 
@@ -322,6 +333,10 @@ function patchDocument(rules, spoofOptions = {}) {
   };
   try { Object.defineProperty(document, key, { value: { restore, version: 2, signature: currentSignature }, configurable: true }); }
   catch { return false; }
+
+  if (spoofOptions.isSharedTab) {
+    try { window.__prism_tab_cast_active = true; } catch {}
+  }
 
   if (optFocusVisibility) {
     for (const [name, value] of [['hasFocus', true], ['hidden', false], ['visibilityState', 'visible'], ['webkitHidden', false], ['webkitVisibilityState', 'visible']]) {
@@ -1003,8 +1018,68 @@ function patchDocument(rules, spoofOptions = {}) {
     }
   }
 
+  // Screenshare selection hiding: hides text selection highlights in screencast when active and enabled
+  const updateSelectionHiding = (forcedActive) => {
+    if (!optScreenshareHideSelection) {
+      if (selectionHideStyle) {
+        try {
+          if (typeof selectionHideStyle.remove === 'function') selectionHideStyle.remove();
+          else if (selectionHideStyle.parentNode && typeof selectionHideStyle.parentNode.removeChild === 'function') {
+            selectionHideStyle.parentNode.removeChild(selectionHideStyle);
+          }
+        } catch {}
+        selectionHideStyle = null;
+      }
+      return;
+    }
+
+    const isCasting = (typeof forcedActive === 'boolean')
+      ? forcedActive
+      : Boolean(typeof window !== 'undefined' && window.__prism_tab_cast_active);
+
+    if (isCasting) {
+      if (!selectionHideStyle || (!selectionHideStyle.isConnected && !selectionHideStyle.parentNode)) {
+        if (typeof document === 'undefined') return;
+        const target = document.head || document.documentElement || document.body;
+        if (!target) return;
+        selectionHideStyle = document.createElement('style');
+        selectionHideStyle.id = '__prism_selection_hide_style__';
+        selectionHideStyle.textContent = [
+          '::selection, *::selection, html::selection, body::selection, div::selection, span::selection, p::selection, a::selection, h1::selection, h2::selection, h3::selection, h4::selection, h5::selection, h6::selection, input::selection, textarea::selection, [contenteditable]::selection, button::selection, li::selection, table::selection, td::selection, th::selection {',
+          '  background: transparent !important;',
+          '  background-color: transparent !important;',
+          '  color: inherit !important;',
+          '  -webkit-text-fill-color: inherit !important;',
+          '  text-shadow: none !important;',
+          '}',
+          '::-moz-selection, *::-moz-selection, html::-moz-selection, body::-moz-selection, div::-moz-selection, span::-moz-selection, p::-moz-selection, a::-moz-selection, h1::-moz-selection, h2::-moz-selection, h3::-moz-selection, h4::-moz-selection, h5::-moz-selection, h6::-moz-selection, input::-moz-selection, textarea::-moz-selection, [contenteditable]::-moz-selection, button::-moz-selection, li::-moz-selection, table::-moz-selection, td::-moz-selection, th::-moz-selection {',
+          '  background: transparent !important;',
+          '  background-color: transparent !important;',
+          '  color: inherit !important;',
+          '  -webkit-text-fill-color: inherit !important;',
+          '  text-shadow: none !important;',
+          '}'
+        ].join('\n');
+        try { target.appendChild(selectionHideStyle); } catch {}
+        if (!selectionHideStyle.parentNode) {
+          selectionHideStyle.parentNode = target;
+        }
+      }
+    } else {
+      if (selectionHideStyle) {
+        try {
+          if (typeof selectionHideStyle.remove === 'function') selectionHideStyle.remove();
+          else if (selectionHideStyle.parentNode && typeof selectionHideStyle.parentNode.removeChild === 'function') {
+            selectionHideStyle.parentNode.removeChild(selectionHideStyle);
+          }
+        } catch {}
+        selectionHideStyle = null;
+      }
+    }
+  };
+
   // Screenshare cursor containment: when casting tab, keep cursor visible parked ~1cm from exit boundary
-  let onCastChange;
+  let onCursorCastChange;
   let showStuckCursor;
   if (optScreenshareCursor) {
     const MARGIN_CM = 38; // ~1cm at standard 96 CSS DPI
@@ -1020,7 +1095,7 @@ function patchDocument(rules, spoofOptions = {}) {
     const isTopLevel = typeof window === 'undefined' || !window.top || window.top === window;
 
     const isTabCasting = () => {
-      return optScreenshareCursor !== false;
+      return optScreenshareCursor !== false && Boolean(typeof window !== 'undefined' && window.__prism_tab_cast_active);
     };
 
     let pointerEl = null;
@@ -1071,7 +1146,10 @@ function patchDocument(rules, spoofOptions = {}) {
     };
 
     showStuckCursor = () => {
-      if (!isTabCasting() || !isTopLevel) return;
+      if (!isTabCasting() || !isTopLevel) {
+        hideOverlay();
+        return;
+      }
       const W = (typeof window !== 'undefined' && window.innerWidth) || targetW;
       const H = (typeof window !== 'undefined' && window.innerHeight) || targetH;
 
@@ -1114,19 +1192,23 @@ function patchDocument(rules, spoofOptions = {}) {
     };
 
     const onLeave = e => {
+      if (!isTabCasting()) return;
       if (e && (e.type === 'mouseleave' || e.type === 'mouseout')) {
         if (e.relatedTarget || e.toElement) return;
       }
       showStuckCursor();
     };
 
-    onCastChange = () => {
-      if (!isTabCasting()) hideOverlay();
+    onCursorCastChange = (e) => {
+      const active = (e && e.detail && typeof e.detail.active === 'boolean') ? e.detail.active : isTabCasting();
+      if (!active || !optScreenshareCursor) {
+        hideOverlay();
+      }
     };
 
     if (typeof window !== 'undefined') {
       window.__prism_set_cursor_stuck = function(stuck, relX, relY, customCursor) {
-        if (!stuck) {
+        if (!stuck || !isTabCasting()) {
           hideOverlay();
           return;
         }
@@ -1165,12 +1247,10 @@ function patchDocument(rules, spoofOptions = {}) {
       window.addEventListener('pointermove', onMove, true);
       window.addEventListener('mouseenter', onMove, true);
       window.addEventListener('blur', onLeave, true);
-      window.addEventListener('__prism_tab_cast_change__', onCastChange, true);
       listeners.push(['mousemove', onMove]);
       listeners.push(['pointermove', onMove]);
       listeners.push(['mouseenter', onMove]);
       listeners.push(['blur', onLeave]);
-      listeners.push(['__prism_tab_cast_change__', onCastChange]);
     }
     if (typeof document !== 'undefined' && document.addEventListener) {
       document.addEventListener('mouseleave', onLeave, true);
@@ -1179,6 +1259,28 @@ function patchDocument(rules, spoofOptions = {}) {
       docListeners.push(['mouseout', onLeave]);
     }
   }
+
+  const onTabCastChange = (e) => {
+    const active = Boolean(e && e.detail && typeof e.detail.active === 'boolean' ? e.detail.active : (typeof window !== 'undefined' && window.__prism_tab_cast_active));
+    if (typeof window !== 'undefined') {
+      window.__prism_tab_cast_active = active;
+    }
+    if (typeof onCursorCastChange === 'function') {
+      onCursorCastChange(e);
+    }
+    updateSelectionHiding(active);
+  };
+
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('__prism_tab_cast_change__', onTabCastChange, true);
+    listeners.push(['__prism_tab_cast_change__', onTabCastChange]);
+  }
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    const onDomLoaded = () => updateSelectionHiding();
+    document.addEventListener('DOMContentLoaded', onDomLoaded, true);
+    docListeners.push(['DOMContentLoaded', onDomLoaded]);
+  }
+  updateSelectionHiding();
 
   // Keep Chromium's actual selection so native copy, drag selection and editing
   // still work. Only the page-facing selection read APIs report an empty range.
@@ -1400,13 +1502,14 @@ function buildFocusScript(rules, spoofOptions = {}) {
 }
 
 class FocusController {
-  constructor({ getRules, getSpoofOptions = () => ({}), getTargetResolution = () => ({ width: 1920, height: 1080 }), getSystemCursor = () => null, getViewBounds = () => ({ width: 0, height: 0 }), onScaleApplied = () => {}, getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
+  constructor({ getRules, getSpoofOptions = () => ({}), getTargetResolution = () => ({ width: 1920, height: 1080 }), getSystemCursor = () => null, getViewBounds = () => ({ width: 0, height: 0 }), getSharedTabId = () => null, onScaleApplied = () => {}, getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
     this.onScaleApplied = onScaleApplied;
     this.getViewBounds = getViewBounds;
     this.getRules = getRules;
     this.getSpoofOptions = getSpoofOptions;
     this.getTargetResolution = getTargetResolution;
     this.getSystemCursor = getSystemCursor;
+    this.getSharedTabId = getSharedTabId;
     this.getFrameSessions = getFrameSessions;
     this.onError = onError;
     this.onStatus = onStatus;
@@ -1700,7 +1803,8 @@ class FocusController {
         const hasSpoof = Object.keys(rawSpoofOptions).length > 0;
         const targetRes = typeof this.getTargetResolution === 'function' ? this.getTargetResolution() : { width: 1920, height: 1080 };
         const sysCursor = typeof this.getSystemCursor === 'function' ? this.getSystemCursor() : null;
-        const spoofOptions = hasSpoof ? { ...rawSpoofOptions, targetResolution: targetRes, systemCursor: sysCursor } : rawSpoofOptions;
+        const isTabShared = (typeof this.getSharedTabId === 'function') && this.getSharedTabId() === tabId;
+        const spoofOptions = hasSpoof ? { ...rawSpoofOptions, targetResolution: targetRes, systemCursor: sysCursor, isSharedTab: isTabShared } : rawSpoofOptions;
         const normalized = focusRules(rules);
         const source = buildFocusScript(rules, spoofOptions);
         const signature = JSON.stringify({ rules: normalized, spoof: spoofOptions });

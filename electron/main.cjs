@@ -151,17 +151,10 @@ function startCursorTracking() {
 
       const optCursor = data.spoof?.screenshareCursor !== false;
       let targetTab = null;
-      if (optCursor) {
-        if (sharedTabId && tabs.has(sharedTabId)) {
-          const candidate = tabs.get(sharedTabId);
-          if (candidate && candidate.spoofOnLoad && candidate.url !== 'about:blank') {
-            targetTab = candidate;
-          }
-        } else if (activeTabId && tabs.has(activeTabId)) {
-          const candidate = tabs.get(activeTabId);
-          if (candidate && candidate.spoofOnLoad && candidate.url !== 'about:blank') {
-            targetTab = candidate;
-          }
+      if (optCursor && sharedTabId && tabs.has(sharedTabId)) {
+        const candidate = tabs.get(sharedTabId);
+        if (candidate && candidate.spoofOnLoad && candidate.url !== 'about:blank') {
+          targetTab = candidate;
         }
       }
 
@@ -218,6 +211,7 @@ function stopCursorTracking() {
 const focus = new FocusController({ getRules: () => data.rules,
   getTargetResolution: () => getFullscreenResolution(),
   getSystemCursor: () => getSystemCursorInfo(),
+  getSharedTabId: () => sharedTabId,
   getViewBounds: id => {
     const tab = tabs.get(id);
     if (!tab || !tab.view) return { width: 0, height: 0 };
@@ -851,7 +845,7 @@ async function configureSession() {
               lastSharedInside = true;
               offScreenDispatchesRemaining = 0;
               setCastState(false);
-              const resetScript = `try { window.__prism_tab_scale = 1; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: 1 } })); } catch {} void 0;`;
+              const resetScript = `try { window.__prism_tab_scale = 1; window.__prism_tab_cast_active = false; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: 1 } })); window.dispatchEvent(new CustomEvent('__prism_tab_cast_change__', { detail: { active: false } })); } catch {} void 0;`;
               for (const tab of tabs.values()) {
                 if (tab.view && !tab.view.webContents.isDestroyed()) {
                   tab.view.webContents.executeJavaScript(resetScript).catch(() => {});
