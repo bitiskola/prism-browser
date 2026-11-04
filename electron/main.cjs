@@ -173,6 +173,7 @@ function stopCursorTracking() {
 
 const focus = new FocusController({ getRules: () => data.rules,
   getTargetResolution: () => getFullscreenResolution(),
+  isTabShared: id => id === sharedTabId,
   getViewBounds: id => {
     const tab = tabs.get(id);
     if (!tab || !tab.view) return { width: 0, height: 0 };
@@ -740,6 +741,9 @@ async function configureSession() {
         if (selection.type === 'tab') {
           sharedTabId = selection.id;
           layout();
+          if (focus && typeof focus.updateMetrics === 'function') {
+            focus.updateMetrics(selection.id);
+          }
           const chosen = availableTabs.find(t => t.id === selection.id);
           const setCastState = (active) => {
             const script = `try { window.__prism_tab_cast_active = ${active}; window.dispatchEvent(new CustomEvent('__prism_tab_cast_change__', { detail: { active: ${active} } })); } catch {} void 0;`;
@@ -753,9 +757,13 @@ async function configureSession() {
           setCastState(true);
           const cleanup = () => {
             if (sharedTabId === selection.id) {
+              const endedSharedId = sharedTabId;
               sharedTabId = null;
               setCastState(false);
               layout();
+              if (focus && typeof focus.updateMetrics === 'function') {
+                focus.updateMetrics(endedSharedId);
+              }
             }
           };
           if (chosen && !chosen.view.webContents.isDestroyed()) {

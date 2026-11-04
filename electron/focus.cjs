@@ -1292,8 +1292,9 @@ function buildFocusScript(rules, spoofOptions = {}) {
 }
 
 class FocusController {
-  constructor({ getRules, getSpoofOptions = () => ({}), getTargetResolution = () => ({ width: 1920, height: 1080 }), getViewBounds = () => ({ width: 0, height: 0 }), getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
+  constructor({ getRules, getSpoofOptions = () => ({}), getTargetResolution = () => ({ width: 1920, height: 1080 }), getViewBounds = () => ({ width: 0, height: 0 }), isTabShared = () => false, getFrameSessions = () => [], onError = () => {}, onStatus = () => {}, executionTimeout = 5000 }) {
     this.getViewBounds = getViewBounds;
+    this.isTabShared = isTabShared;
     this.getRules = getRules;
     this.getSpoofOptions = getSpoofOptions;
     this.getTargetResolution = getTargetResolution;
@@ -1305,6 +1306,9 @@ class FocusController {
   }
 
   computeScale(tabId, targetRes) {
+    if (typeof this.isTabShared === 'function' && this.isTabShared(tabId)) {
+      return 1;
+    }
     if (typeof this.getViewBounds !== 'function') return 1;
     const bounds = this.getViewBounds(tabId);
     if (!bounds || !bounds.width || !bounds.height || !targetRes || !targetRes.width || !targetRes.height) return 1;
