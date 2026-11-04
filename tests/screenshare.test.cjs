@@ -489,4 +489,20 @@ test('screenshare WebCodecs crop/scale pipeline transforms scaled down tab video
   assert.equal(outFrame.visibleRect.width, Math.round(1536 * 0.825));
   assert.equal(outFrame.visibleRect.height, Math.round(960 * 0.825));
   assert.equal(inputFrame.closed, true);
+
+  // Verify smooth transition when switching to fullscreen (scale = 1)
+  context.window.__prism_tab_scale = 1.0;
+  const nextFrame = new MockVideoFrame({
+    displayWidth: 1536,
+    displayHeight: 960,
+    codedWidth: 1536,
+    codedHeight: 960
+  });
+  await capturedTransformer.transform(nextFrame, fakeController);
+  assert.equal(enqueued.length, 2);
+  const transitionFrame = enqueued[1];
+  // Instead of an abrupt jump to 1.0, scale smoothly approaches 1.0
+  const expectedInterpScale = 0.825 + (1.0 - 0.825) * 0.35;
+  assert.equal(transitionFrame.visibleRect.width, Math.round(1536 * expectedInterpScale));
+  assert.equal(transitionFrame.visibleRect.height, Math.round(960 * expectedInterpScale));
 });

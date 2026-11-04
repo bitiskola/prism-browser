@@ -911,19 +911,39 @@ function patchDocument(rules, spoofOptions = {}) {
                 const processor = new MediaStreamTrackProcessor({ track: videoTrack });
                 const generator = new MediaStreamTrackGenerator({ kind: 'video' });
 
+                let currentScale = null;
+                let targetScale = 1;
+
                 const transformer = new TransformStream({
                   async transform(frame, controller) {
                     try {
-                      const scale = (typeof window.__prism_tab_scale === 'number' && window.__prism_tab_scale > 0)
+                      const reportedScale = (typeof window.__prism_tab_scale === 'number' && window.__prism_tab_scale > 0)
                         ? window.__prism_tab_scale
                         : 1;
-                      if (scale < 0.999) {
-                        const srcW = frame.visibleRect ? frame.visibleRect.width : frame.displayWidth;
-                        const srcH = frame.visibleRect ? frame.visibleRect.height : frame.displayHeight;
-                        const subW = Math.max(1, Math.min(frame.codedWidth, Math.round(srcW * scale)));
-                        const subH = Math.max(1, Math.min(frame.codedHeight, Math.round(srcH * scale)));
+                      targetScale = reportedScale;
+
+                      if (currentScale === null) {
+                        currentScale = targetScale;
+                      } else if (Math.abs(currentScale - targetScale) > 0.001) {
+                        currentScale += (targetScale - currentScale) * 0.35;
+                        if (Math.abs(currentScale - targetScale) < 0.002) {
+                          currentScale = targetScale;
+                        }
+                      } else {
+                        currentScale = targetScale;
+                      }
+
+                      if (currentScale < 0.999) {
+                        const startX = (frame.visibleRect && typeof frame.visibleRect.x === 'number') ? frame.visibleRect.x : 0;
+                        const startY = (frame.visibleRect && typeof frame.visibleRect.y === 'number') ? frame.visibleRect.y : 0;
+                        const srcW = (frame.visibleRect && typeof frame.visibleRect.width === 'number') ? frame.visibleRect.width : frame.displayWidth;
+                        const srcH = (frame.visibleRect && typeof frame.visibleRect.height === 'number') ? frame.visibleRect.height : frame.displayHeight;
+                        const maxW = (typeof frame.codedWidth === 'number' && frame.codedWidth > 0) ? frame.codedWidth - startX : srcW;
+                        const maxH = (typeof frame.codedHeight === 'number' && frame.codedHeight > 0) ? frame.codedHeight - startY : srcH;
+                        const subW = Math.max(1, Math.min(maxW, Math.round(srcW * currentScale)));
+                        const subH = Math.max(1, Math.min(maxH, Math.round(srcH * currentScale)));
                         const cropped = new VideoFrame(frame, {
-                          visibleRect: { x: 0, y: 0, width: subW, height: subH },
+                          visibleRect: { x: startX, y: startY, width: subW, height: subH },
                           displayWidth: frame.displayWidth,
                           displayHeight: frame.displayHeight
                         });
@@ -1394,6 +1414,12 @@ class FocusController {
     if (!optFullscreen) return;
     const targetRes = typeof this.getTargetResolution === 'function' ? this.getTargetResolution() : { width: 1920, height: 1080 };
     const scale = this.computeScale(tabId, targetRes);
+    if (state.lastAppliedScale === scale && state.lastAppliedW === targetRes.width && state.lastAppliedH === targetRes.height) {
+      return;
+    }
+    state.lastAppliedScale = scale;
+    state.lastAppliedW = targetRes.width;
+    state.lastAppliedH = targetRes.height;
     const deviceMetricsParams = {
       width: targetRes.width,
       height: targetRes.height,

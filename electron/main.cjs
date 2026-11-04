@@ -275,11 +275,26 @@ function updateFullscreenState() {
   setTimeout(layout, 150);
 }
 
+let lastNormalContentSize = null;
+let lastBroadcastScale = null;
+
 function layout() {
   if (!win || win.isDestroyed()) return;
-  const [width, height] = win.getContentSize();
+  let [width, height] = win.getContentSize();
   const active = tabs.get(activeTabId);
   const isWindowFull = win.isFullScreen();
+  const targetRes = getFullscreenResolution();
+  const targetW = targetRes?.width || 1920;
+  const targetH = targetRes?.height || 1080;
+
+  if (!isWindowFull) {
+    if (lastNormalContentSize && width === targetW && height === targetH) {
+      width = lastNormalContentSize[0];
+      height = lastNormalContentSize[1];
+    } else if (width !== targetW || height !== targetH) {
+      lastNormalContentSize = [width, height];
+    }
+  }
   for (const tab of tabs.values()) {
     const isShared = (tab.id === sharedTabId);
     const show = viewport.visible && ((tab.id === activeTabId && tab.url !== 'about:blank' && !tab.error) || isShared);
@@ -320,14 +335,18 @@ function layout() {
     win.webContents.focus();
   }
   if (sharedTabId) {
-    const targetRes = getFullscreenResolution();
     const scale = (focus && typeof focus.computeScale === 'function') ? focus.computeScale(sharedTabId, targetRes) : 1;
-    const scaleScript = `try { window.__prism_tab_scale = ${scale}; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: ${scale} } })); } catch {} void 0;`;
-    for (const tab of tabs.values()) {
-      if (tab.view && !tab.view.webContents.isDestroyed()) {
-        tab.view.webContents.executeJavaScript(scaleScript).catch(() => {});
+    if (lastBroadcastScale !== scale) {
+      lastBroadcastScale = scale;
+      const scaleScript = `try { window.__prism_tab_scale = ${scale}; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: ${scale} } })); } catch {} void 0;`;
+      for (const tab of tabs.values()) {
+        if (tab.view && !tab.view.webContents.isDestroyed()) {
+          tab.view.webContents.executeJavaScript(scaleScript).catch(() => {});
+        }
       }
     }
+  } else {
+    lastBroadcastScale = null;
   }
 }
 function visit(tab) {
