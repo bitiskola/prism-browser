@@ -21,6 +21,11 @@ const SEARCH_TEMPLATES = Object.freeze({
 });
 
 const DEFAULT_PREFERENCES = Object.freeze({
+  theme: Object.freeze({
+    accentColor: '#b49bf8',
+    hideLogo: false,
+    hideModuleText: false,
+  }),
   typing: Object.freeze({ speed: 1 }),
   search: Object.freeze({ engine: 'google', customTemplate: '' }),
   spoof: Object.freeze({
@@ -46,6 +51,16 @@ const DEFAULT_PREFERENCES = Object.freeze({
 function objectInput(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid ${label} settings.`);
   return value;
+}
+
+function normalizeTheme(input = DEFAULT_PREFERENCES.theme) {
+  objectInput(input, 'theme');
+  const accentColor = typeof input.accentColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(input.accentColor.trim())
+    ? input.accentColor.trim().toLowerCase()
+    : DEFAULT_PREFERENCES.theme.accentColor;
+  const hideLogo = Boolean(input.hideLogo);
+  const hideModuleText = Boolean(input.hideModuleText);
+  return { accentColor, hideLogo, hideModuleText };
 }
 
 function normalizeTyping(input = DEFAULT_PREFERENCES.typing) {
@@ -209,7 +224,7 @@ function publicProxyConfig(config) {
 }
 
 module.exports = {
-  SEARCH_ENGINES, DEFAULT_PREFERENCES, normalizeSearch, searchURL, normalizeTyping,
+  SEARCH_ENGINES, DEFAULT_PREFERENCES, normalizeTheme, normalizeSearch, searchURL, normalizeTyping,
   normalizeSpoof, SUPPORTED_SPOOF_PLATFORMS, SUPPORTED_SPOOF_BROWSERS,
   normalizeProxy, publicProxyConfig, normalizeProxyHost,
 };

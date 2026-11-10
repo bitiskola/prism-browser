@@ -10,7 +10,7 @@ const { FaviconController, createImageDecoder } = require('./favicon.cjs');
 const { makeCookieExport, parseCookieExportText, cookieSetDetails, cookieDomainInScope, MAX_FILE_BYTES } = require('./cookies.cjs');
 const { NetworkMonitor } = require('./network.cjs');
 const { FocusController, getChromeUserAgent, SPOOF_PLATFORMS, SPOOF_BROWSERS, getSpoofProfile } = require('./focus.cjs');
-const { DEFAULT_PREFERENCES, SEARCH_ENGINES, normalizeSearch, normalizeProxy, publicProxyConfig, normalizeTyping, normalizeSpoof, SUPPORTED_SPOOF_BROWSERS } = require('./preferences.cjs');
+const { DEFAULT_PREFERENCES, SEARCH_ENGINES, normalizeTheme, normalizeSearch, normalizeProxy, publicProxyConfig, normalizeTyping, normalizeSpoof, SUPPORTED_SPOOF_BROWSERS } = require('./preferences.cjs');
 const { ProxyController } = require('./proxy.cjs');
 const { AdblockController, normalizeAdblockSettings } = require('./adblock.cjs');
 const { ClipboardTyping } = require('./clipboard-typing.cjs');
@@ -31,6 +31,7 @@ let pendingScreenshare = null, sharedTabId = null;
 let saveTimer, stateTimer, closing = false, flushed = false, proxyChangesInFlight = 0;
 let faviconDecoderView, faviconDecoderReady, faviconDecoderShutdown = false;
 let data = { rules: [], bookmarks: [], history: [], tabs: [], activeIndex: 0,
+  theme: { ...DEFAULT_PREFERENCES.theme },
   search: { ...DEFAULT_PREFERENCES.search }, typing: { ...DEFAULT_PREFERENCES.typing },
   spoof: { ...DEFAULT_PREFERENCES.spoof },
   proxy: publicProxyConfig(DEFAULT_PREFERENCES.proxy),
@@ -318,6 +319,7 @@ function readState() {
     data.history = (saved.history || []).filter(x => isWebURL(x.url)).slice(0, 1000);
     data.tabs = (saved.tabs || []).filter(x => x === 'about:blank' || isWebURL(x)).slice(0, 30);
     data.activeIndex = Math.max(0, Number(saved.activeIndex) || 0);
+    try { data.theme = normalizeTheme(saved.theme); } catch { /* Keep default theme settings. */ }
     try { data.search = normalizeSearch(saved.search); } catch { /* Keep defaults for invalid legacy preferences. */ }
     try { data.typing = normalizeTyping(saved.typing); } catch { /* Keep normal speed for invalid saved preferences. */ }
     try { data.spoof = normalizeSpoof(saved.spoof); } catch { /* Keep default spoof settings. */ }
@@ -355,6 +357,7 @@ function snapshot() {
     rules: data.rules, downloads: [...downloads.values()].map(({ item, ...entry }) => entry), profilePath: profile,
     networkPaused: monitor.paused, networkCount: monitor.entries.size,
     isFullscreen: isFull,
+    theme: data.theme,
     search: data.search, searchEngines: SEARCH_ENGINES, typing: data.typing,
     spoof: { ...data.spoof },
     proxy: { ...data.proxy, ...proxy?.snapshot(), applying: proxyChangesInFlight > 0, hasCredentials: Boolean(proxy?.getConfig().username || proxy?.getConfig().password), ...(connectionError ? { error: connectionError } : {}) },
@@ -1084,6 +1087,7 @@ async function action(name, payload = {}) {
   const tab = active(), wc = tab?.view.webContents;
   switch (name) {
     case 'get-state': return snapshot();
+    case 'theme-save': data.theme = normalizeTheme(payload.theme); saveState(); break;
     case 'search-save': data.search = normalizeSearch(payload.search); saveState(); break;
     case 'typing-save': data.typing = normalizeTyping(payload.typing); saveState(); break;
     case 'spoof-save': {

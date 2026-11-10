@@ -18,6 +18,19 @@ const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ico
 const paintIcons = (scope = document) => $$('[data-icon]', scope).forEach(el => { el.innerHTML = icon(el.dataset.icon); });
 const uid = () => crypto.randomUUID();
 const preview = !window.prism;
+const defaultTheme={accentColor:'#b49bf8',hideLogo:false,hideModuleText:false};
+function applyTheme(theme) {
+  const accent = (typeof theme?.accentColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(theme.accentColor.trim()))
+    ? theme.accentColor.trim().toLowerCase()
+    : defaultTheme.accentColor;
+  document.documentElement.style.setProperty('--purple', accent);
+  const r = parseInt(accent.slice(1, 3), 16) || 180;
+  const g = parseInt(accent.slice(3, 5), 16) || 155;
+  const b = parseInt(accent.slice(5, 7), 16) || 248;
+  document.documentElement.style.setProperty('--purple-glow', `rgba(${r}, ${g}, ${b}, 0.28)`);
+  document.body.classList.toggle('hide-brand-logo', Boolean(theme?.hideLogo));
+  document.body.classList.toggle('compact-module-buttons', Boolean(theme?.hideModuleText));
+}
 const defaultTyping={speed:1};
 const typingSpeedLabel=speed=>`${Number(speed).toFixed(2).replace(/\.?0+$/, '')}×${Number(speed)===1?' · Normal':''}`;
 const defaultSearch={engine:'google',customTemplate:''};
@@ -26,7 +39,7 @@ const defaultSpoof={focusVisibility:true,fullscreen:true,keyboard:true,clipboard
 const defaultAdblock={enabled:true,allowlist:[],blocklist:[],blockedCount:0,ready:false,error:'',engineName:'Adblock Plus core'};
 const searchEngines={duckduckgo:['DuckDuckGo','https://duckduckgo.com/?q={query}'],google:['Google','https://www.google.com/search?q={query}'],bing:['Bing','https://www.bing.com/search?q={query}'],brave:['Brave Search','https://search.brave.com/search?q={query}'],startpage:['Startpage','https://www.startpage.com/sp/search?query={query}'],custom:['Custom search engine','']};
 const settingsDrafts={};
-let state = { tabs:[],activeTabId:null,bookmarks:[],history:[],downloads:[],rules:[],profilePath:'',networkPaused:false,networkCount:0,typing:{...defaultTyping},search:{...defaultSearch},proxy:{...defaultProxy},adblock:{...defaultAdblock},spoof:{...defaultSpoof} };
+let state = { tabs:[],activeTabId:null,bookmarks:[],history:[],downloads:[],rules:[],profilePath:'',networkPaused:false,networkCount:0,theme:{...defaultTheme},typing:{...defaultTyping},search:{...defaultSearch},proxy:{...defaultProxy},adblock:{...defaultAdblock},spoof:{...defaultSpoof} };
 let pane = null;
 let entries = [];
 let selectedEntry = null;
@@ -91,6 +104,7 @@ function makePreviewBridge() {
       }
       case 'navigate': current.url=safeURL(payload.url);current.title=hostname(current.url)||'New tab';break;
       case 'rules-save': data.rules=payload.rules;break;
+      case 'theme-save': data.theme={...payload.theme};break;
       case 'typing-save': data.typing={...payload.typing};break;
       case 'search-save': data.search={...payload.search};break;
       case 'proxy-save': {const {enabled,type,host,port,bypass}=payload.proxy;data.proxy={...defaultProxy,enabled,type,host,port,bypass};break;}
@@ -121,6 +135,8 @@ function sendViewport() { const isFull=document.body.classList.contains('fullscr
 
 function renderState(next) {
   if (!next || !Array.isArray(next.tabs)) return;
+  if (next.theme) state.theme = { ...defaultTheme, ...next.theme };
+  applyTheme(state.theme);
   const previousIds = new Set(state.tabs.map(tab => tab.id));
   if(next.activeTabId!==state.activeTabId)lastBounds='';
   state = {...state,...next}; state.rules ||= [];state.bookmarks ||= [];state.history ||= [];state.downloads ||= [];
@@ -276,7 +292,7 @@ function renderChrome() {
   $('#profile-status').textContent=preview?'Desktop UI preview':'Persistent local session';
   $('#preview-label').innerHTML=`<span class="status-dot"></span>${preview?'DESKTOP PREVIEW':'LOCAL PROFILE'}`;
   const showError=!home&&(preview||tab?.error);$('#page-error').hidden=!showError;
-  if(showError) $('#page-error').innerHTML=`<div><span>${icon(preview?'globe':'alert')}</span><h2>${preview?'Your next stop is in the desktop app.':'This page couldn’t be opened.'}</h2><p>${preview?'This is an interactive preview of Prism’s interface. Launch the Electron app to browse real websites with persistent sessions and site-scoped inspection.':escape(typeof tab.error==='string'?tab.error:tab.error?.description||'The website may be unavailable. Check the address and try again.')}</p><p class="muted">${escape(tab?.url)}</p><button class="secondary-button" id="error-home">${icon('arrow-left')} Back to a new tab</button>${!preview?'<button class="primary-button" id="error-retry">Try again</button>':''}</div>`;
+  if(showError) $('#page-error').innerHTML=`<div class="error-card"><div class="error-icon-box">${icon(preview?'globe':'alert')}</div><h2>${preview?'Your next stop is in the desktop app.':'This page couldn’t be opened.'}</h2><p class="error-message">${preview?'This is an interactive preview of Prism’s interface. Launch the Electron app to browse real websites with persistent sessions and site-scoped inspection.':escape(typeof tab.error==='string'?tab.error:tab.error?.description||'The website may be unavailable. Check the address and try again.')}</p><p class="error-url">${escape(tab?.url)}</p><div class="error-actions"><button class="secondary-button" id="error-home">${icon('arrow-left')} Back to a new tab</button>${!preview?'<button class="primary-button" id="error-retry">Try again</button>':''}</div></div>`;
 }
 function renderHome() {
   const signature=JSON.stringify(state.bookmarks);if(signature===lastHomeSignature)return;lastHomeSignature=signature;
@@ -332,9 +348,21 @@ function detailHTML(entry) {
 function renderSettings() {
   const previousScroll=$('.settings-scroll')?.scrollTop||0;const focusedId=document.activeElement?.closest('.settings-form')?document.activeElement.id:null;const selection=focusedId&&typeof document.activeElement.selectionStart==='number'?[document.activeElement.selectionStart,document.activeElement.selectionEnd]:null;
   const currentHost=hostname(activeTab()?.url);
-  const typing={...state.typing,...settingsDrafts.typing};const search={...state.search,...settingsDrafts.search};const proxy={...state.proxy,...settingsDrafts.proxy};const blocker={...state.adblock,...settingsDrafts.adblock};const spoof={...defaultSpoof,...state.spoof,...settingsDrafts.spoof};
-  $('#side-panel').innerHTML=panelHeader('Browser settings','sliders')+`<p class="panel-subtitle">Make the web feel more like yours.</p><nav class="settings-nav" aria-label="Settings sections"><button data-settings-section="search">Search</button><button data-settings-section="typing">Typing</button><button data-settings-section="spoof">Spoof mode</button><button data-settings-section="proxy">Proxy</button><button data-settings-section="adblock">Ad blocker</button><button data-settings-section="sites">Sites</button></nav><div class="panel-scroll settings-scroll">
+  const theme={...defaultTheme,...state.theme,...settingsDrafts.theme};const typing={...state.typing,...settingsDrafts.typing};const search={...state.search,...settingsDrafts.search};const proxy={...state.proxy,...settingsDrafts.proxy};const blocker={...state.adblock,...settingsDrafts.adblock};const spoof={...defaultSpoof,...state.spoof,...settingsDrafts.spoof};
+  $('#side-panel').innerHTML=panelHeader('Browser settings','sliders')+`<p class="panel-subtitle">Make the web feel more like yours.</p><nav class="settings-nav" aria-label="Settings sections"><button data-settings-section="theme">Theme</button><button data-settings-section="search">Search</button><button data-settings-section="typing">Typing</button><button data-settings-section="spoof">Spoof mode</button><button data-settings-section="proxy">Proxy</button><button data-settings-section="adblock">Ad blocker</button><button data-settings-section="sites">Sites</button></nav><div class="panel-scroll settings-scroll">
     ${preview?'<div class="preview-notice">Interactive desktop preview. Proxy routing, ad blocking, browsing, and spoof mode run in the Electron app.</div>':''}
+    <section id="settings-theme" class="settings-section" tabindex="-1"><h3 class="section-label">THEME & APPEARANCE</h3><form id="theme-settings-form" class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('edit')}</span><div><h3>Accent color &amp; appearance</h3><p>Customize Prism’s accent color and toolbar interface.</p></div></div><label class="field-label">Accent color</label><div class="theme-color-palette">${[
+      ['#b49bf8','Purple (Default)'],
+      ['#60a5fa','Sky Blue'],
+      ['#38bdf8','Cyan'],
+      ['#34d399','Emerald'],
+      ['#a3e635','Lime'],
+      ['#fbbf24','Amber'],
+      ['#f97316','Orange'],
+      ['#f43f5e','Rose'],
+      ['#ec4899','Pink'],
+      ['#818cf8','Indigo']
+    ].map(([hex,label])=>`<button type="button" class="theme-color-swatch ${(theme.accentColor||'#b49bf8').toLowerCase()===hex.toLowerCase()?'active':''}" data-color="${hex}" title="${label}" style="background-color: ${hex}"></button>`).join('')}<div class="theme-custom-color" title="Custom color"><input type="color" id="theme-custom-picker" value="${theme.accentColor||'#b49bf8'}" aria-label="Custom color picker"></div></div><label class="field-label" for="theme-hex-input">Custom Hex Code</label><div class="theme-hex-row"><input class="field-input" id="theme-hex-input" type="text" placeholder="#b49bf8" value="${escape(theme.accentColor||'#b49bf8')}" spellcheck="false" maxlength="7"></div><div class="theme-toggles"><label class="setting-line form-switch"><span>Hide brand logo<small>Hides the "prism." wordmark in the top-left titlebar</small></span><input id="theme-hide-logo" type="checkbox" class="switch-input" ${theme.hideLogo?'checked':''}></label><label class="setting-line form-switch"><span>Hide module buttons text<small>Only show icons and dropdowns for Spoof mode, Proxy, and Ad blocker</small></span><input id="theme-hide-module-text" type="checkbox" class="switch-input" ${theme.hideModuleText?'checked':''}></label></div><button class="primary-button full-width" type="submit">Save theme preferences</button></form></section>
     <section id="settings-search" class="settings-section" tabindex="-1"><h3 class="section-label">SEARCH & NAVIGATION</h3><form id="search-settings-form" class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('search')}</span><div><h3>Your default search engine</h3><p>Used by the address bar and new tab search.</p></div></div><label class="field-label" for="search-engine">Search engine</label><select class="field-input" id="search-engine">${Object.entries(searchEngines).map(([value,[label]])=>`<option value="${value}" ${search.engine===value?'selected':''}>${label}</option>`).join('')}</select><div id="custom-search-fields" ${search.engine==='custom'?'':'hidden'}><label class="field-label" for="search-template">Custom search URL</label><input class="field-input" id="search-template" type="text" placeholder="https://example.com/search?q={query}" value="${escape(search.customTemplate)}" autocomplete="off" spellcheck="false"><p class="field-help">Use an HTTPS URL with <code>{query}</code> where the search words should go.</p></div><button type="submit" class="primary-button full-width">Save search engine</button></form></section>
     <section id="settings-typing" class="settings-section" tabindex="-1"><h3 class="section-label">CLIPBOARD TYPING</h3><div class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('sliders')}</span><div><h3>Typing speed</h3><p>Type clipboard text with Ctrl+9 or Command+9 on macOS.</p></div></div><div class="typing-speed-label"><label class="field-label" for="typing-speed">Speed</label><output id="typing-speed-value" for="typing-speed">${typingSpeedLabel(typing.speed)}</output></div><input id="typing-speed" class="typing-speed-slider" type="range" min="0.25" max="3" step="0.25" value="${typing.speed}" aria-valuetext="${typingSpeedLabel(typing.speed)}" aria-describedby="typing-speed-help"><div class="typing-speed-scale"><span>Slower · 0.25×</span><span>Faster · 3×</span></div><p id="typing-speed-help" class="form-footnote">Random timing and natural pauses stay on at every speed. Changes save automatically. Press Escape or the shortcut again to stop typing.</p></div></section>
         <section id="settings-spoof" class="settings-section" tabindex="-1"><h3 class="section-label">SPOOF MODE PREFERENCES</h3><form id="spoof-settings-form" class="settings-form">
@@ -356,6 +384,40 @@ function renderSettings() {
     <section id="settings-profile" class="settings-section"><h3 class="section-label">YOUR LOCAL PROFILE</h3><div class="settings-card"><h3>Sessions that stay with you</h3><p>Cookies and site storage are kept in a separate profile between launches.</p><p class="profile-path">${escape(state.profilePath||'Managed by Prism on this device')}</p><button class="secondary-button full-width" data-action="view-cookies">${icon('cookie')}Inspect cookies${currentHost?' for this site':''}</button>${currentHost?`<button class="danger-button full-width" data-action="clear-site-data">Clear data for ${escape(currentHost)}</button>`:''}</div></section>
     </div><div class="panel-footer"><span>${icon('lock')}Your browser preferences</span><span>Stored on this device</span></div>`;
   if(settingsDrafts.proxy){$('#proxy-username').value=settingsDrafts.proxy.username||'';$('#proxy-password').value=settingsDrafts.proxy.password||'';}
+  $('#theme-settings-form')?.addEventListener('submit',saveThemeSettings);
+  $$('.theme-color-swatch').forEach(swatch=>{
+    swatch.addEventListener('click',()=>{
+      const hex=swatch.dataset.color;if(!hex)return;
+      const hexIn=$('#theme-hex-input'),picker=$('#theme-custom-picker');
+      if(hexIn)hexIn.value=hex;if(picker)picker.value=hex;
+      $$('.theme-color-swatch').forEach(s=>s.classList.toggle('active',s===swatch));
+      const draft={...(settingsDrafts.theme||state.theme),accentColor:hex};
+      settingsDrafts.theme=draft;applyTheme(draft);
+    });
+  });
+  $('#theme-custom-picker')?.addEventListener('input',e=>{
+    const hex=e.target.value;const hexIn=$('#theme-hex-input');if(hexIn)hexIn.value=hex;
+    $$('.theme-color-swatch').forEach(s=>s.classList.toggle('active',s.dataset.color?.toLowerCase()===hex.toLowerCase()));
+    const draft={...(settingsDrafts.theme||state.theme),accentColor:hex};
+    settingsDrafts.theme=draft;applyTheme(draft);
+  });
+  $('#theme-hex-input')?.addEventListener('input',e=>{
+    let hex=e.target.value.trim();if(!hex.startsWith('#')&&hex.length===6)hex='#'+hex;
+    if(/^#[0-9a-fA-F]{6}$/.test(hex)){
+      const picker=$('#theme-custom-picker');if(picker)picker.value=hex;
+      $$('.theme-color-swatch').forEach(s=>s.classList.toggle('active',s.dataset.color?.toLowerCase()===hex.toLowerCase()));
+      const draft={...(settingsDrafts.theme||state.theme),accentColor:hex};
+      settingsDrafts.theme=draft;applyTheme(draft);
+    }
+  });
+  $('#theme-hide-logo')?.addEventListener('change',e=>{
+    const draft={...(settingsDrafts.theme||state.theme),hideLogo:e.target.checked};
+    settingsDrafts.theme=draft;applyTheme(draft);
+  });
+  $('#theme-hide-module-text')?.addEventListener('change',e=>{
+    const draft={...(settingsDrafts.theme||state.theme),hideModuleText:e.target.checked};
+    settingsDrafts.theme=draft;applyTheme(draft);
+  });
   $('#search-settings-form').addEventListener('submit',saveSearchSettings);$('#proxy-settings-form').addEventListener('submit',saveProxySettings);$('#adblock-settings-form').addEventListener('submit',saveAdblockSettings);$('#spoof-settings-form')?.addEventListener('submit',saveSpoofSettings);
   $('#typing-speed').addEventListener('input',event=>{
     const speed=Number(event.target.value);settingsDrafts.typing={speed};
@@ -418,6 +480,19 @@ async function savePreference(key,value,action,message) {
   const scroll=$('.settings-scroll')?.scrollTop||0;const result=await invoke(action,{[key]:value});if(result===undefined)return false;
   delete settingsDrafts[key];if(result.tabs)renderState(result);else if(result.state)renderState(result.state);else {const next=await invoke('get-state');if(next?.tabs)renderState(next);}
   if(pane==='settings'){renderSettings();$('.settings-scroll').scrollTop=scroll;}renderChrome();toast(preview?`${message} Preview preferences saved.`:message);return true;
+}
+async function saveThemeSettings(event) {
+  event.preventDefault();
+  let hex=($('#theme-hex-input')?.value||'').trim();
+  if(!hex.startsWith('#')&&hex.length===6)hex='#'+hex;
+  const theme={
+    accentColor:/^#[0-9a-fA-F]{6}$/.test(hex)?hex.toLowerCase():(state.theme?.accentColor||defaultTheme.accentColor),
+    hideLogo:Boolean($('#theme-hide-logo')?.checked),
+    hideModuleText:Boolean($('#theme-hide-module-text')?.checked)
+  };
+  delete settingsDrafts.theme;
+  applyTheme(theme);
+  await savePreference('theme',theme,'theme-save','Theme preferences saved.');
 }
 async function saveSearchSettings(event) {
   event.preventDefault();const search={engine:$('#search-engine').value,customTemplate:$('#search-template').value.trim()};

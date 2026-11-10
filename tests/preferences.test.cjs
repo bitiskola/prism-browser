@@ -1,11 +1,10 @@
 'use strict';
-const { normalizeTyping } = require('../electron/preferences.cjs');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   SEARCH_ENGINES, DEFAULT_PREFERENCES, normalizeSearch, searchURL,
-  normalizeProxy, publicProxyConfig,
+  normalizeProxy, publicProxyConfig, normalizeTheme, normalizeTyping,
 } = require('../electron/preferences.cjs');
 
 test('search preferences default to Google and list each supported engine once', () => {
@@ -65,7 +64,8 @@ test('custom templates are validated even when stored for a currently inactive p
 
 test('proxy normalization canonicalizes DNS, IDN and bracketed IPv6 and keeps a separate integer port', () => {
   assert.deepEqual(normalizeProxy(), DEFAULT_PREFERENCES.proxy);
-  assert.equal(normalizeProxy({ host: ' Proxy.EXAMPLE. ', port: '3128' }).host, 'proxy.example');
+  assert.equal(normalizeProxy({ host: ' Proxy.EXAMPLE. ' }).host, 'proxy.example');
+  assert.equal(normalizeProxy({ host: 'proxy.example', port: '3128' }).host, 'proxy.example');
   assert.equal(normalizeProxy({ host: 'proxy.example', port: '3128' }).port, 3128);
   assert.equal(normalizeProxy({ host: 'bücher.example' }).host, 'xn--bcher-kva.example');
   assert.equal(normalizeProxy({ enabled: true, type: 'socks5', host: '[0:0:0:0:0:0:0:1]', port: 1080 }).host, '[::1]');
@@ -122,4 +122,38 @@ test('typing speed defaults safely and rejects invalid saved or IPC values', () 
   for (const speed of [0.25, 1, 2, 3]) assert.deepEqual(normalizeTyping({speed}), {speed});
   for (const speed of [0, -1, 3.25, NaN, Infinity, '2', true]) assert.throws(() => normalizeTyping({speed}));
   for (const input of [null, [], 'fast']) assert.throws(() => normalizeTyping(input));
+});
+
+test('theme preferences default safely and normalize accent colors and booleans', () => {
+  assert.deepEqual(normalizeTheme(), {
+    accentColor: '#b49bf8',
+    hideLogo: false,
+    hideModuleText: false,
+  });
+  assert.deepEqual(normalizeTheme({}), {
+    accentColor: '#b49bf8',
+    hideLogo: false,
+    hideModuleText: false,
+  });
+  assert.deepEqual(normalizeTheme({ accentColor: '#ff0055', hideLogo: true, hideModuleText: true }), {
+    accentColor: '#ff0055',
+    hideLogo: true,
+    hideModuleText: true,
+  });
+  assert.deepEqual(normalizeTheme({ accentColor: '#ABCDEF' }), {
+    accentColor: '#abcdef',
+    hideLogo: false,
+    hideModuleText: false,
+  });
+  assert.deepEqual(normalizeTheme({ accentColor: 'invalid' }), {
+    accentColor: '#b49bf8',
+    hideLogo: false,
+    hideModuleText: false,
+  });
+  assert.deepEqual(normalizeTheme({ accentColor: 123 }), {
+    accentColor: '#b49bf8',
+    hideLogo: false,
+    hideModuleText: false,
+  });
+  for (const input of [null, [], 'theme']) assert.throws(() => normalizeTheme(input));
 });
