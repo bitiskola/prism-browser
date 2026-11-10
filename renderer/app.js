@@ -92,8 +92,14 @@ function applyTheme(theme) {
   const b = parseInt(accent.slice(5, 7), 16) || 248;
   document.documentElement.style.setProperty('--purple-glow', `rgba(${r}, ${g}, ${b}, 0.28)`);
   const isLight = theme?.mode === 'light';
-  const cloudAlpha = isLight ? 0.16 : 0.22;
-  document.documentElement.style.setProperty('--newtab-glow', `rgba(${r}, ${g}, ${b}, ${cloudAlpha})`);
+  const bgR = isLight ? 243 : 16;
+  const bgG = isLight ? 244 : 17;
+  const bgB = isLight ? 246 : 20;
+  const blendWeight = isLight ? 0.16 : 0.22;
+  const cloudR = Math.round(r * blendWeight + bgR * (1 - blendWeight));
+  const cloudG = Math.round(g * blendWeight + bgG * (1 - blendWeight));
+  const cloudB = Math.round(b * blendWeight + bgB * (1 - blendWeight));
+  document.documentElement.style.setProperty('--newtab-glow', `rgb(${cloudR}, ${cloudG}, ${cloudB})`);
   document.documentElement.style.setProperty('--purple-symbol-border', `rgba(${r}, ${g}, ${b}, 0.8)`);
   document.documentElement.style.setProperty('--purple-symbol-mid', `rgba(${r}, ${g}, ${b}, 0.6)`);
 

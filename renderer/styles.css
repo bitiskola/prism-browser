@@ -500,8 +500,8 @@ button svg { flex-shrink: 0; }
   align-items: center;
   padding: 14px 0;
   gap: 8px;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
-  background: #111216;
+  border-right: 1px solid var(--line);
+  background: var(--titlebar-bg, #111216);
   flex-shrink: 0;
 }
 .rail-button {
@@ -564,7 +564,7 @@ button svg { flex-shrink: 0; }
   flex: 1;
   min-width: 0;
   position: relative;
-  background: #111216;
+  background: var(--bg);
   overflow: hidden;
 }
 #viewport { position: absolute; inset: 0; background: #fff; }
@@ -1306,8 +1306,8 @@ button svg { flex-shrink: 0; }
    ========================================================================== */
 .side-panel {
   width: var(--panel);
-  background: #17181d;
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--surface, #17181d);
+  border-left: 1px solid var(--line);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -2289,7 +2289,274 @@ body.light-mode {
   --symbol-dark: #c5c2d3;
 }
 
+body.light-mode {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* 1. Titlebar & Navigation */
+body.light-mode .titlebar {
+  background: var(--titlebar-bg);
+  color: var(--text);
+}
 body.light-mode .wordmark {
+  color: var(--text);
+}
+body.light-mode .tab {
+  color: var(--muted);
+}
+body.light-mode .tab:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text);
+}
+body.light-mode .tab.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+body.light-mode .tab.active .tab-close {
+  color: var(--muted);
+}
+body.light-mode .tab.active .tab-close:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text);
+}
+body.light-mode .new-tab {
+  color: var(--muted);
+}
+body.light-mode .new-tab:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text);
+}
+body.light-mode .window-controls button {
+  color: var(--text);
+}
+body.light-mode .window-controls button:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+body.light-mode .window-controls button:last-child:hover {
+  background: #e04455;
+  color: #ffffff;
+}
+
+/* 2. Toolbar & Address Bar */
+body.light-mode .toolbar {
+  background: var(--toolbar-bg);
+  border-bottom-color: var(--line);
+}
+body.light-mode .icon-button {
+  color: var(--muted);
+}
+body.light-mode .icon-button:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+}
+body.light-mode .address-bar {
+  background: #ffffff;
+  border-color: var(--line-strong);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+body.light-mode .address-bar input {
+  color: var(--text);
+}
+body.light-mode .address-bar input::placeholder {
+  color: var(--muted);
+}
+body.light-mode .address-bar > span:first-child {
+  color: var(--muted);
+}
+body.light-mode .module-button {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: var(--line);
+  color: var(--text);
+}
+body.light-mode .module-button:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+/* 3. Left Rail (Tools Dock) */
+body.light-mode .rail {
+  background: var(--titlebar-bg);
+  border-right-color: var(--line);
+}
+body.light-mode .rail-button {
+  color: var(--muted);
+}
+body.light-mode .rail-button:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+}
+body.light-mode .rail-button.active {
+  background: var(--purple-glow);
+  color: var(--purple);
+}
+body.light-mode .rail-line {
+  background: var(--line);
+}
+body.light-mode .profile-avatar {
+  background: var(--surface-2);
+  color: var(--purple);
+  border-color: var(--line);
+}
+
+/* 4. Side Panel & Settings */
+body.light-mode .side-panel {
+  background: var(--bg);
+  border-left-color: var(--line);
+  color: var(--text);
+}
+body.light-mode .panel-header {
+  border-bottom-color: var(--line);
+}
+body.light-mode .panel-title {
+  color: var(--text);
+}
+body.light-mode .panel-subtitle {
+  color: var(--muted);
+}
+body.light-mode .panel-close {
+  color: var(--muted);
+}
+body.light-mode .panel-close:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.06);
+}
+body.light-mode .panel-footer {
+  background: var(--surface);
+  border-top-color: var(--line);
+  color: var(--muted);
+}
+body.light-mode .settings-nav {
+  border-bottom-color: var(--line);
+}
+body.light-mode .settings-nav button {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--muted);
+}
+body.light-mode .settings-nav button:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+body.light-mode .settings-nav button.active {
+  background: var(--purple);
+  color: #ffffff;
+  border-color: var(--purple);
+}
+body.light-mode .settings-heading h3,
+body.light-mode .settings-card h3 {
+  color: var(--text);
+}
+body.light-mode .settings-heading p,
+body.light-mode .settings-card p {
+  color: var(--muted);
+}
+body.light-mode .section-label {
+  color: var(--muted);
+}
+body.light-mode .settings-card {
+  background: #ffffff;
+  border-color: var(--line);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+body.light-mode .settings-form .field-input,
+body.light-mode .field-input,
+body.light-mode .settings-form select.field-input,
+body.light-mode .settings-form textarea {
+  background: #ffffff;
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+body.light-mode .settings-form .field-input::placeholder,
+body.light-mode .field-input::placeholder {
+  color: var(--muted);
+}
+body.light-mode .settings-form .field-label {
+  color: var(--text);
+}
+body.light-mode .field-help {
+  color: var(--muted);
+}
+body.light-mode .theme-hex-input {
+  background: #ffffff !important;
+  border-color: var(--line-strong) !important;
+  color: var(--text) !important;
+}
+body.light-mode .shortcut-remap-input {
+  background: #ffffff !important;
+  border-color: var(--line-strong) !important;
+  color: var(--text) !important;
+}
+body.light-mode .shortcut-reset-btn {
+  background: var(--surface-2) !important;
+  border-color: var(--line) !important;
+  color: var(--text) !important;
+}
+body.light-mode .shortcut-reset-btn:hover {
+  background: rgba(0, 0, 0, 0.08) !important;
+}
+body.light-mode .theme-mode-btn {
+  background: var(--surface-2);
+  border-color: var(--line);
+  color: var(--text);
+}
+body.light-mode .theme-mode-btn:hover:not(.active) {
+  background: rgba(0, 0, 0, 0.05);
+}
+body.light-mode .switch,
+body.light-mode .switch-input {
+  background: #d1d5db;
+}
+body.light-mode .switch:after {
+  background: #ffffff;
+}
+body.light-mode .switch[aria-checked=true],
+body.light-mode .switch-input:checked {
+  background: var(--purple);
+}
+body.light-mode .spoof-card {
+  background: var(--surface);
+  border-color: var(--line);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+body.light-mode .spoof-card:hover {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+}
+body.light-mode .spoof-card-info h4 {
+  color: var(--text);
+}
+body.light-mode .spoof-card-info p {
+  color: var(--muted);
+}
+body.light-mode .spoof-card-details {
+  border-top-color: var(--line);
+}
+body.light-mode .spoof-summary-bar {
+  background: var(--surface);
+  border-color: var(--line);
+}
+body.light-mode .spoof-summary-title {
+  color: var(--text);
+}
+body.light-mode .spoof-summary-sub {
+  color: var(--muted);
+}
+body.light-mode .rule-item {
+  background: #ffffff;
+  border-color: var(--line);
+}
+
+/* 5. New Tab Page & Widgets */
+body.light-mode .main-surface {
+  background: var(--bg);
+}
+body.light-mode .workspace-label {
+  color: var(--muted);
+}
+body.light-mode .environment-badge {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: var(--line);
   color: var(--text);
 }
 body.light-mode .brand-wordmark {
@@ -2300,8 +2567,61 @@ body.light-mode .home-search {
   border-color: var(--line-strong);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
 }
+body.light-mode .home-search:hover:not(:focus-within) {
+  background: #ffffff;
+  border-color: var(--purple);
+}
 body.light-mode .home-search input {
   color: var(--text);
+}
+body.light-mode .home-search input::placeholder {
+  color: var(--muted);
+}
+body.light-mode .weather-card {
+  background: #ffffff;
+  border-color: var(--line);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+}
+body.light-mode .weather-card:hover {
+  border-color: var(--purple);
+}
+body.light-mode .weather-title {
+  color: var(--text);
+}
+body.light-mode .weather-choose-link {
+  color: var(--muted);
+}
+body.light-mode .weather-choose-link:hover {
+  color: var(--text);
+}
+body.light-mode .mini-dots {
+  color: var(--muted);
+}
+body.light-mode .mini-dots:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+}
+body.light-mode .shortcut-tile:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+body.light-mode .shortcut-tile-title {
+  color: var(--text);
+}
+body.light-mode .shortcut-tile-sub {
+  color: var(--muted);
+}
+body.light-mode .text-button {
+  color: var(--muted);
+}
+body.light-mode .text-button:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--purple);
+}
+body.light-mode .widgets-toggle {
+  color: var(--text);
+}
+body.light-mode .widgets-toggle:hover {
+  background: rgba(0, 0, 0, 0.05);
 }
 body.light-mode .widget-card {
   background: #ffffff;
@@ -2312,22 +2632,169 @@ body.light-mode .widget-card:hover {
   border-color: var(--purple);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
 }
-body.light-mode .settings-card {
-  background: #ffffff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-}
-body.light-mode .settings-nav button {
-  background: rgba(0, 0, 0, 0.04);
-  border-color: var(--line);
-  color: var(--muted);
-}
-body.light-mode .settings-nav button:hover {
-  background: rgba(0, 0, 0, 0.08);
+body.light-mode .clock-city {
   color: var(--text);
+}
+body.light-mode .clock-time {
+  color: var(--text);
+}
+body.light-mode .clock-zone {
+  color: var(--muted);
 }
 body.light-mode .clock-row {
   border-bottom-color: var(--line);
 }
-body.light-mode .theme-mode-btn:hover:not(.active) {
-  background: rgba(0, 0, 0, 0.05);
+body.light-mode .timer-digits {
+  color: var(--text);
+}
+body.light-mode .timer-dial-bg {
+  stroke: var(--surface-2);
+}
+body.light-mode .timer-play-btn {
+  background: var(--surface-2);
+  color: var(--text);
+}
+body.light-mode .timer-play-btn:hover {
+  background: var(--line-strong);
+}
+body.light-mode .timer-stepper {
+  background: var(--surface-2);
+  color: var(--text);
+}
+body.light-mode .timer-stepper:hover {
+  background: var(--line-strong);
+}
+body.light-mode .timer-mode-btn {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+body.light-mode .timer-mode-btn:hover {
+  background: var(--line-strong);
+  color: var(--text);
+}
+body.light-mode .timer-mode-btn.active {
+  background: var(--purple);
+  color: #171124;
+}
+body.light-mode .checklist-title {
+  color: var(--text);
+}
+body.light-mode .checklist-row:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+body.light-mode .checklist-text {
+  color: var(--text);
+}
+body.light-mode .checklist-custom-check {
+  border-color: var(--line-strong);
+}
+body.light-mode .checklist-input {
+  background: #ffffff;
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+body.light-mode .checklist-empty-state {
+  color: var(--muted);
+}
+body.light-mode .feature-card {
+  background: #ffffff;
+  border-color: var(--line);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+}
+body.light-mode .feature-card:hover {
+  border-color: var(--purple);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+}
+body.light-mode .feature-card h2 {
+  color: var(--text);
+}
+body.light-mode .feature-card p {
+  color: var(--muted);
+}
+body.light-mode .card-top > span:last-child {
+  color: var(--muted);
+}
+body.light-mode .newtab-footer {
+  color: var(--muted);
+}
+
+/* 6. Status Bar */
+body.light-mode .statusbar {
+  background: var(--titlebar-bg);
+  border-top-color: var(--line);
+  color: var(--muted);
+}
+body.light-mode .statusbar button {
+  color: var(--muted);
+}
+body.light-mode .statusbar button:hover {
+  color: var(--text);
+}
+body.light-mode .status-separator {
+  background: var(--line);
+}
+body.light-mode .statusbar-center {
+  color: var(--muted);
+}
+
+/* 7. Collections & Network Inspector */
+body.light-mode .collection-item {
+  background: #ffffff;
+  border-color: var(--line);
+}
+body.light-mode .collection-item:hover {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+}
+body.light-mode .collection-title {
+  color: var(--text);
+}
+body.light-mode .collection-meta {
+  color: var(--muted);
+}
+body.light-mode .monitor-banner {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: var(--line-strong);
+}
+body.light-mode .monitor-banner h3 {
+  color: var(--text);
+}
+body.light-mode .monitor-banner p {
+  color: var(--muted);
+}
+body.light-mode .network-table-head {
+  background: var(--surface-2);
+  border-color: var(--line);
+  color: var(--muted);
+}
+body.light-mode .network-row {
+  border-bottom-color: var(--line);
+  color: var(--text);
+}
+body.light-mode .network-row:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+body.light-mode .panel-search {
+  background: #ffffff;
+  border-color: var(--line-strong);
+}
+body.light-mode .panel-search input {
+  color: var(--text);
+}
+body.light-mode .details {
+  background: var(--bg);
+  border-top-color: var(--line);
+}
+body.light-mode .detail-tabs {
+  border-bottom-color: var(--line);
+}
+body.light-mode .detail-tab {
+  color: var(--muted);
+}
+body.light-mode .detail-tab:hover {
+  color: var(--text);
+}
+body.light-mode .empty-network-steps {
+  background: var(--surface-2);
+  border-top-color: var(--line);
 }
