@@ -65,6 +65,7 @@ function parseXcursor(fileBuf, desiredSize = 24) {
   const ntoc = fileBuf.readUInt32LE(12);
   let bestChunk = null;
   let bestDiff = Infinity;
+  let bestNominal = 0;
 
   for (let i = 0; i < ntoc; i++) {
     const type = fileBuf.readUInt32LE(16 + i * 12);
@@ -73,9 +74,11 @@ function parseXcursor(fileBuf, desiredSize = 24) {
 
     if (type === 0xfffd0002) { // Image chunk
       const diff = Math.abs(subtype - desiredSize);
-      if (diff < bestDiff) {
+      // On a tie prefer the larger image: downscaling stays sharp.
+      if (diff < bestDiff || (diff === bestDiff && subtype > bestNominal)) {
         bestDiff = diff;
         bestChunk = pos;
+        bestNominal = subtype;
       }
     }
   }
@@ -112,6 +115,7 @@ function parseXcursor(fileBuf, desiredSize = 24) {
     height,
     xhot,
     yhot,
+    nominal: bestNominal,
     dataUrl: 'data:image/png;base64,' + png.toString('base64')
   };
 }
@@ -136,7 +140,7 @@ function parseCurFile(fileBuf, desiredSize = 24) {
     const offset = fileBuf.readUInt32LE(o + 12);
 
     const diff = Math.abs(w - desiredSize);
-    if (diff < bestDiff) {
+    if (diff < bestDiff || (diff === bestDiff && bestEntry && w > bestEntry.w)) {
       bestDiff = diff;
       bestEntry = { w, h, xhot, yhot, size, offset };
     }
@@ -228,27 +232,45 @@ const FALLBACK_SVGS = {
   }
 };
 
-function getLinuxCursor() {
+// Cursor metrics returned to callers are in DIPs (device-independent pixels),
+// the unit the OS uses for its own pointer size and the unit the screencast
+// overlay converts into page CSS pixels. Images are picked at the display's
+// physical resolution so they stay sharp at fractional/HiDPI scales.
+// Maps image pixels to DIPs: `dipSize` DIPs per `physicalWidth` image pixels.
+function toDips(parsed, dipSize, physicalWidth) {
+  const k = dipSize / physicalWidth;
+  return {
+    ...parsed,
+    width: parsed.width * k,
+    height: parsed.height * k,
+    xhot: parsed.xhot * k,
+    yhot: parsed.yhot * k,
+  };
+}
+
+function positiveInt(value) {
+  const parsed = parseInt(String(value ?? '').replace(/^['"]|['"]$/g, ''), 10);
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 512 ? parsed : 0;
+}
+
+function getLinuxCursor(scaleFactor = 1) {
   let theme = '';
-  let size = 24;
+  let size = 0;
 
   try {
     const rawTheme = execFileSync('gsettings', ['get', 'org.gnome.desktop.interface', 'cursor-theme'], { encoding: 'utf8', timeout: 500 }).trim();
     theme = rawTheme.replace(/^['"]|['"]$/g, '');
   } catch {}
 
+  // GNOME's cursor-size is in logical pixels, matching Chromium's pointer size.
+  // XCURSOR_SIZE is only a fallback: it is often a physical size under scaling.
   try {
-    const rawSize = execFileSync('gsettings', ['get', 'org.gnome.desktop.interface', 'cursor-size'], { encoding: 'utf8', timeout: 500 }).trim();
-    const parsed = parseInt(rawSize, 10);
-    if (!isNaN(parsed) && parsed > 0) size = parsed;
+    size = positiveInt(execFileSync('gsettings', ['get', 'org.gnome.desktop.interface', 'cursor-size'], { encoding: 'utf8', timeout: 500 }).trim());
   } catch {}
-
   if (!theme && process.env.XCURSOR_THEME) theme = process.env.XCURSOR_THEME;
-  if (process.env.XCURSOR_SIZE) {
-    const parsed = parseInt(process.env.XCURSOR_SIZE, 10);
-    if (!isNaN(parsed) && parsed > 0) size = parsed;
-  }
+  if (!size) size = positiveInt(process.env.XCURSOR_SIZE) || 24;
 
+  const physical = Math.max(1, Math.round(size * scaleFactor));
   const themesToTry = [theme, 'Yaru', 'DMZ-White', 'Adwaita', 'default', 'breeze_cursors'].filter(Boolean);
   const searchDirs = [
     path.join(os.homedir(), '.icons'),
@@ -267,30 +289,54 @@ function getLinuxCursor() {
         try {
           if (fs.existsSync(filePath)) {
             const fileBuf = fs.readFileSync(filePath);
-            const parsed = parseXcursor(fileBuf, size) || parseCurFile(fileBuf, size);
+            const parsed = parseXcursor(fileBuf, physical);
             if (parsed) {
-              return { ...parsed, theme: t, platform: 'linux' };
+              // Chromium loads the theme image closest to size x scale and
+              // draws it 1:1 in physical pixels, i.e. image / scale in DIPs.
+              return { ...toDips(parsed, 1, scaleFactor), size, theme: t, platform: 'linux' };
             }
+            const cur = parseCurFile(fileBuf, physical);
+            if (cur) return { ...toDips(cur, size, cur.width), size, theme: t, platform: 'linux' };
           }
         } catch {}
       }
     }
   }
 
-  return { ...FALLBACK_SVGS.linux, platform: 'linux', theme: theme || 'default' };
+  return { ...toDips(FALLBACK_SVGS.linux, size, FALLBACK_SVGS.linux.width), size, platform: 'linux', theme: theme || 'default' };
 }
 
-function getWindowsCursor() {
-  const sysRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
-  let cursorPath = '';
-
+function readRegistryValue(key, name) {
   try {
-    const output = execFileSync('reg', ['query', 'HKCU\\Control Panel\\Cursors', '/v', 'Arrow'], { encoding: 'utf8', timeout: 500 });
-    const match = output.match(/Arrow\s+REG_\w+\s+(.*)/i);
-    if (match && match[1]) {
-      cursorPath = match[1].trim().replace(/%SystemRoot%/gi, sysRoot);
-    }
-  } catch {}
+    const output = execFileSync('reg', ['query', key, '/v', name], { encoding: 'utf8', timeout: 500, windowsHide: true });
+    const match = output.match(new RegExp(name + '\\s+(REG_\\w+)\\s+(.*)', 'i'));
+    if (!match) return null;
+    return { type: match[1].toUpperCase(), value: match[2].trim() };
+  } catch { return null; }
+}
+
+function getWindowsCursor(scaleFactor = 1) {
+  const sysRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+
+  // Windows draws the pointer at CursorBaseSize DIPs (32 by default; larger
+  // when "Mouse pointer size" is raised in Accessibility settings), scaled by
+  // the display scale. The whole cursor frame is stretched to that size.
+  let size = 32;
+  const base = readRegistryValue('HKCU\\Control Panel\\Cursors', 'CursorBaseSize');
+  if (base) {
+    const parsed = base.type === 'REG_DWORD' ? parseInt(base.value, 16) : parseInt(base.value, 10);
+    if (Number.isFinite(parsed) && parsed >= 16 && parsed <= 512) size = parsed;
+  }
+  const physical = Math.max(1, Math.round(size * scaleFactor));
+
+  let cursorPath = '';
+  const arrow = readRegistryValue('HKCU\\Control Panel\\Cursors', 'Arrow');
+  if (arrow && arrow.value) {
+    cursorPath = arrow.value
+      .replace(/%SystemRoot%/gi, sysRoot)
+      .replace(/%windir%/gi, sysRoot)
+      .replace(/%USERPROFILE%/gi, os.homedir());
+  }
 
   const candidates = [
     cursorPath,
@@ -302,13 +348,13 @@ function getWindowsCursor() {
     try {
       if (fs.existsSync(c)) {
         const buf = fs.readFileSync(c);
-        const parsed = parseCurFile(buf, 24);
-        if (parsed) return { ...parsed, platform: 'win32' };
+        const parsed = parseCurFile(buf, physical);
+        if (parsed) return { ...toDips(parsed, size, parsed.width), size, platform: 'win32' };
       }
     } catch {}
   }
 
-  return { ...FALLBACK_SVGS.win32, platform: 'win32' };
+  return { ...toDips(FALLBACK_SVGS.win32, size, FALLBACK_SVGS.win32.width), size, platform: 'win32' };
 }
 
 function getMacCursor() {
@@ -337,24 +383,30 @@ function getMacCursor() {
   return { ...FALLBACK_SVGS.darwin, platform: 'darwin' };
 }
 
-let cachedCursor = null;
+const cachedCursors = new Map();
 
-function getSystemCursorInfo(forceRefresh = false) {
-  if (cachedCursor && !forceRefresh) return cachedCursor;
+// options: { scaleFactor = 1, forceRefresh = false }. A boolean is accepted as
+// forceRefresh for older callers.
+function getSystemCursorInfo(options = {}) {
+  const opts = typeof options === 'boolean' ? { forceRefresh: options } : (options || {});
+  const scaleFactor = Number.isFinite(opts.scaleFactor) && opts.scaleFactor > 0 ? opts.scaleFactor : 1;
+  if (opts.forceRefresh) cachedCursors.clear();
+  const key = String(scaleFactor);
+  if (cachedCursors.has(key)) return cachedCursors.get(key);
 
-  if (process.platform === 'win32') {
-    cachedCursor = getWindowsCursor();
-  } else if (process.platform === 'darwin') {
-    cachedCursor = getMacCursor();
-  } else {
-    cachedCursor = getLinuxCursor();
-  }
+  let info;
+  if (process.platform === 'win32') info = getWindowsCursor(scaleFactor);
+  else if (process.platform === 'darwin') info = getMacCursor();
+  else info = getLinuxCursor(scaleFactor);
 
-  return cachedCursor;
+  cachedCursors.set(key, info);
+  return info;
 }
 
 module.exports = {
   getSystemCursorInfo,
+  getLinuxCursor,
+  getWindowsCursor,
   parseXcursor,
   parseCurFile,
   makePngFromRgba,

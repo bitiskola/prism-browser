@@ -455,8 +455,10 @@ test('screenshare WebCodecs crop/scale pipeline transforms scaled down tab video
     MediaStreamTrackProcessor: MockMediaStreamTrackProcessor,
     MediaStreamTrackGenerator: MockMediaStreamTrackGenerator,
     VideoFrame: MockVideoFrame,
-    TransformStream: MockTransformStream
+    TransformStream: MockTransformStream,
+    performance: { now: () => clock }
   });
+  let clock = 1000;
   const rules = [{ host: 'testsite.example', focus: true }];
 
   vm.runInContext(buildFocusScript(rules), context);
@@ -502,6 +504,25 @@ test('screenshare WebCodecs crop/scale pipeline transforms scaled down tab video
   assert.equal(enqueued.length, 2);
   const transitionFrame = enqueued[1];
   assert.equal(transitionFrame, nextFrame, 'fullscreen frame is passed directly without zoom effect');
+
+  // While the main process resizes the shared tab, frames are dropped (the
+  // viewer keeps the last good frame) instead of being cropped with a scale
+  // that is out of step with what Chromium painted.
+  context.window.__prism_tab_scale_hold_until = clock + 1500;
+  const heldFrame = new MockVideoFrame({ displayWidth: 1600, displayHeight: 900, codedWidth: 1600, codedHeight: 900 });
+  await capturedTransformer.transform(heldFrame, fakeController);
+  assert.equal(enqueued.length, 2, 'held frame is not forwarded');
+  assert.equal(heldFrame.closed, true, 'held frame is released');
+
+  // Release with the new scale: frames flow again, cropped with it.
+  context.window.__prism_tab_scale = 0.5;
+  context.window.__prism_tab_scale_hold_until = clock + 80;
+  clock += 81;
+  const resumedFrame = new MockVideoFrame({ displayWidth: 1536, displayHeight: 960, codedWidth: 1536, codedHeight: 960 });
+  await capturedTransformer.transform(resumedFrame, fakeController);
+  assert.equal(enqueued.length, 3);
+  assert.equal(enqueued[2].visibleRect.width, 768);
+  assert.equal(enqueued[2].displayWidth, 1536);
 });
 
 test('tab screenshare resolution and aspect ratio only apply when spoof mode is active for the tab', () => {
@@ -551,67 +572,101 @@ test('tab screenshare resolution and aspect ratio only apply when spoof mode is 
   assert.equal(scaleOn, 1200 / 1920, 'scale is computed when spoof mode is on');
 });
 
-test('tab screenshare dispatches off-screen cursor and mouseLeave on exit to prevent stuck corner artifact', () => {
-  const events = [];
-  const mockWebContents = {
+function overlayFixture({ focused = false, visible = true } = {}) {
+  const calls = [];
+  const wc = {
     isDestroyed: () => false,
-    sendInputEvent(evt) {
-      events.push(evt);
-    }
+    isFocused: () => focused,
+    focus() { calls.push('focus'); },
   };
+  const view = {
+    webContents: wc,
+    getVisible: () => visible,
+    setVisible(v) { calls.push(`visible:${v}`); },
+  };
+  return { tab: { view }, calls };
+}
 
-  let lastSharedInside = true;
-  let offScreenDispatchesRemaining = 0;
+test('capture cursor overlay reset hides and re-shows the shared view in one tick', () => {
+  const { resetCaptureCursorOverlay } = require('../electron/cast-sync.cjs');
+  const { tab, calls } = overlayFixture();
+  assert.equal(resetCaptureCursorOverlay(tab, { windowFocused: true, focusSpoofed: false }), true);
+  // A hidden->visible WebContents change makes Chromium re-create its capture
+  // cursor tracker in the idle state, removing the pointer stuck at the edge.
+  assert.deepEqual(calls, ['visible:false', 'visible:true']);
+});
 
-  function onCursorPoll(cursorPoint, sharedScreenRect, isFocused) {
-    const isSharedInside = (
-      cursorPoint.x >= sharedScreenRect.x &&
-      cursorPoint.x < sharedScreenRect.x + sharedScreenRect.width &&
-      cursorPoint.y >= sharedScreenRect.y &&
-      cursorPoint.y < sharedScreenRect.y + sharedScreenRect.height &&
-      isFocused
-    );
+test('capture cursor overlay reset restores keyboard focus only for focus-spoofed tabs', () => {
+  const { resetCaptureCursorOverlay } = require('../electron/cast-sync.cjs');
+  const spoofed = overlayFixture({ focused: true });
+  assert.equal(resetCaptureCursorOverlay(spoofed.tab, { windowFocused: true, focusSpoofed: true }), true);
+  assert.deepEqual(spoofed.calls, ['visible:false', 'visible:true', 'focus']);
 
-    if (!isSharedInside) {
-      if (lastSharedInside) {
-        lastSharedInside = false;
-        offScreenDispatchesRemaining = 2;
-      }
-      if (offScreenDispatchesRemaining > 0) {
-        offScreenDispatchesRemaining--;
-        try {
-          mockWebContents.sendInputEvent({ type: 'mouseMove', x: -10000, y: -10000 });
-          mockWebContents.sendInputEvent({ type: 'mouseLeave', x: -10000, y: -10000 });
-        } catch {}
-      }
-    } else {
-      lastSharedInside = true;
-      offScreenDispatchesRemaining = 0;
-    }
-    return isSharedInside;
-  }
+  // A plain page would observe the blur/focus pair; keep Chromium's default.
+  const plain = overlayFixture({ focused: true });
+  assert.equal(resetCaptureCursorOverlay(plain.tab, { windowFocused: true, focusSpoofed: false }), true);
+  assert.deepEqual(plain.calls, []);
+});
 
-  const rect = { x: 100, y: 100, width: 800, height: 600 };
+test('capture cursor overlay reset waits for drags and skips inactive windows or hidden views', () => {
+  const { resetCaptureCursorOverlay } = require('../electron/cast-sync.cjs');
+  const dragging = overlayFixture();
+  dragging.tab.mouseButtonDown = true;
+  assert.equal(resetCaptureCursorOverlay(dragging.tab, { windowFocused: true, focusSpoofed: true }), false, 'retried after release');
+  assert.deepEqual(dragging.calls, []);
+  dragging.tab.mouseButtonDown = false;
+  assert.equal(resetCaptureCursorOverlay(dragging.tab, { windowFocused: true, focusSpoofed: true }), true);
+  assert.deepEqual(dragging.calls, ['visible:false', 'visible:true']);
 
-  // 1. Cursor moves inside view
-  assert.equal(onCursorPoll({ x: 200, y: 200 }, rect, true), true);
-  assert.equal(events.length, 0, 'no off-screen dispatch while inside');
+  const inactive = overlayFixture();
+  assert.equal(resetCaptureCursorOverlay(inactive.tab, { windowFocused: false, focusSpoofed: true }), true);
+  assert.deepEqual(inactive.calls, []);
 
-  // 2. Cursor exits view boundary (e.g. into toolbar at x: 200, y: 50)
-  assert.equal(onCursorPoll({ x: 200, y: 50 }, rect, true), false);
-  assert.equal(events.length, 2, 'dispatched off-screen move and mouseLeave on exit');
-  assert.deepEqual(events[0], { type: 'mouseMove', x: -10000, y: -10000 });
-  assert.deepEqual(events[1], { type: 'mouseLeave', x: -10000, y: -10000 });
+  const hidden = overlayFixture({ visible: false });
+  assert.equal(resetCaptureCursorOverlay(hidden.tab, { windowFocused: true, focusSpoofed: true }), true);
+  assert.deepEqual(hidden.calls, []);
+});
 
-  // 3. Second poll while still outside: sends safety follow-up
-  assert.equal(onCursorPoll({ x: 200, y: 50 }, rect, true), false);
-  assert.equal(events.length, 4);
+test('shared tab resize holds the screencast, applies bounds with metrics in one tick, then releases', async () => {
+  const { runSharedResize } = require('../electron/cast-sync.cjs');
+  const log = [];
+  const tab = {
+    id: 7,
+    view: { setBounds(b) { log.push(`bounds:${b.width}`); } },
+    pendingBounds: { x: 0, y: 0, width: 1280, height: 720 },
+  };
+  let resolveMetrics;
+  const deps = {
+    hold: async () => { log.push('hold'); },
+    release: () => { log.push('release'); },
+    isAlive: () => true,
+    updateMetrics: id => {
+      // The override must be sent in the same tick as setBounds.
+      log.push(`metrics:${id}`);
+      return new Promise(r => { resolveMetrics = r; });
+    },
+  };
+  const run = runSharedResize(tab, deps);
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(log, ['hold', 'bounds:1280', 'metrics:7']);
 
-  // 4. Subsequent polls while outside: remaining count is 0, no spam
-  assert.equal(onCursorPoll({ x: 200, y: 50 }, rect, true), false);
-  assert.equal(events.length, 4);
+  // A second layout during the transition only queues the newest bounds.
+  tab.pendingBounds = { x: 0, y: 0, width: 1920, height: 1080 };
+  await runSharedResize(tab, deps);
+  assert.deepEqual(log, ['hold', 'bounds:1280', 'metrics:7'], 'no concurrent run');
 
-  // 5. Cursor re-enters: resets state
-  assert.equal(onCursorPoll({ x: 300, y: 300 }, rect, true), true);
-  assert.equal(events.length, 4);
+  resolveMetrics();
+  await new Promise(r => setImmediate(r));
+  resolveMetrics();
+  await run;
+  assert.deepEqual(log, ['hold', 'bounds:1280', 'metrics:7', 'hold', 'bounds:1920', 'metrics:7', 'release']);
+  assert.equal(tab.resizeRunning, false);
+});
+
+test('shared tab resize always releases the hold, even when the tab is gone', async () => {
+  const { runSharedResize } = require('../electron/cast-sync.cjs');
+  const log = [];
+  const tab = { id: 1, view: { setBounds() { log.push('bounds'); } }, pendingBounds: { width: 1, height: 1 } };
+  await runSharedResize(tab, { hold: async () => log.push('hold'), release: () => log.push('release'), isAlive: () => false, updateMetrics: async () => log.push('metrics') });
+  assert.deepEqual(log, ['hold', 'release']);
 });

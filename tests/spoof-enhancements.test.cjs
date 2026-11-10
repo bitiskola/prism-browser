@@ -17,7 +17,7 @@ test('DEFAULT_PREFERENCES includes spoof with all features enabled, platform win
   assert.equal(DEFAULT_PREFERENCES.spoof.selection, true);
   assert.equal(DEFAULT_PREFERENCES.spoof.screenshare, true);
   assert.equal(DEFAULT_PREFERENCES.spoof.screenshareCursor, true);
-  assert.equal(DEFAULT_PREFERENCES.spoof.screenshareHideSelection, true);
+  assert.equal('screenshareHideSelection' in DEFAULT_PREFERENCES.spoof, false, 'selection hiding was removed');
   assert.equal(DEFAULT_PREFERENCES.spoof.osPlatform, true);
   assert.equal(DEFAULT_PREFERENCES.spoof.platform, 'win64');
   assert.equal(DEFAULT_PREFERENCES.spoof.browserIdentity, true);
@@ -34,7 +34,8 @@ test('normalizeSpoof validates options and defaults safely', () => {
   assert.equal(empty.selection, true);
   assert.equal(empty.screenshare, true);
   assert.equal(empty.screenshareCursor, true);
-  assert.equal(empty.screenshareHideSelection, true);
+  assert.equal('screenshareHideSelection' in empty, false);
+  assert.equal('screenshareHideSelection' in normalizeSpoof({ screenshareHideSelection: true }), false, 'legacy saved setting is dropped');
   assert.equal(empty.osPlatform, true);
   assert.equal(empty.platform, 'win64');
   assert.equal(empty.browserIdentity, true);
@@ -427,8 +428,11 @@ test('fullscreen lock embeds 1920x1080 true fullscreen resolution spoofing and s
     }
   };
 
+  // Give the mock its own prototype: Object.getPrototypeOf(screen) is the
+  // shared Object.prototype, and patching it leaks `width` getters into every
+  // object created by later tests.
   const Screen = function() {};
-  Screen.prototype = Object.getPrototypeOf(screen);
+  Object.setPrototypeOf(screen, Screen.prototype);
 
   const context = vm.createContext({ document, window, screen, Screen, visualViewport, VisualViewport, ScreenOrientation, Element, Document, URL, DOMException });
 
@@ -481,262 +485,145 @@ test('fullscreen lock embeds 1920x1080 true fullscreen resolution spoofing and s
   assert.equal(window.innerHeight, 700);
 });
 
-test('screenshare cursor containment parks pointer ~1cm from exit side during tab cast and restores on return', () => {
-  const rules = [{ host: 'exam.test', focus: true }];
+function cursorFixture() {
   const docListeners = new Map();
   const winListeners = new Map();
-
-  let appendedHost = null;
+  const appended = [];
   const body = {
-    appendChild(el) { el.parentNode = this; appendedHost = el; return el; },
-    removeChild(el) { if (appendedHost === el) { appendedHost = null; el.parentNode = null; } }
+    appendChild(el) { el.parentNode = this; appended.push(el); return el; },
+    removeChild(el) { const i = appended.indexOf(el); if (i >= 0) appended.splice(i, 1); el.parentNode = null; }
   };
-
   const document = {
     body,
     documentElement: body,
     location: { href: 'https://exam.test/quiz' },
     hasFocus() { return true; },
     createElement(tag) {
-      const el = {
+      return {
         tagName: tag.toUpperCase(),
         style: {},
         setAttribute(k, v) { this[k] = v; },
         appendChild(child) { this.children = this.children || []; this.children.push(child); return child; },
         parentNode: null
       };
-      el.attachShadow = () => el;
-      return el;
     },
-    addEventListener(type, fn) {
-      const set = docListeners.get(type) || new Set();
-      set.add(fn);
-      docListeners.set(type, set);
-    },
-    removeEventListener(type, fn) {
-      docListeners.get(type)?.delete(fn);
-    }
+    addEventListener(type, fn) { const set = docListeners.get(type) || new Set(); set.add(fn); docListeners.set(type, set); },
+    removeEventListener(type, fn) { docListeners.get(type)?.delete(fn); }
   };
   body.parentNode = document;
-
   const window = {
     innerWidth: 1920,
     innerHeight: 1080,
-    addEventListener(type, fn) {
-      const set = winListeners.get(type) || new Set();
-      set.add(fn);
-      winListeners.set(type, set);
-    },
-    removeEventListener(type, fn) {
-      winListeners.get(type)?.delete(fn);
-    }
+    addEventListener(type, fn) { const set = winListeners.get(type) || new Set(); set.add(fn); winListeners.set(type, set); },
+    removeEventListener(type, fn) { winListeners.get(type)?.delete(fn); }
   };
+  const fire = (map, type, event) => { for (const fn of [...(map.get(type) || [])]) fn({ type, ...event }); };
+  const pointer = () => appended[0]?.children?.find(c => c.className === 'prism-cast-pointer');
+  return { document, window, docListeners, winListeners, appended, pointer,
+    win: (type, event = {}) => fire(winListeners, type, event),
+    doc: (type, event = {}) => fire(docListeners, type, event) };
+}
 
-  const context = vm.createContext({ document, window, URL, DOMException });
+test('screenshare cursor containment parks pointer ~1cm from exit side, driven only by the OS pointer tracker', () => {
+  const rules = [{ host: 'exam.test', focus: true }];
+  const f = cursorFixture();
+  const { window } = f;
+  const context = vm.createContext({ document: f.document, window, URL, DOMException });
   vm.runInContext(buildFocusScript(rules, { screenshareCursor: true }), context);
 
-  // 1. When NOT in tab-only screenshare (__prism_tab_cast_active is false), fake mouse does NOT show
-  for (const fn of winListeners.get('mousemove') || []) {
-    fn({ clientX: 1900, clientY: 450 });
-  }
-  for (const fn of docListeners.get('mouseleave') || []) {
-    fn({ type: 'mouseleave' });
-  }
-  assert.equal(appendedHost, null, 'cursor host NOT created when not in tab-only screencast');
-  if (typeof window.__prism_set_cursor_stuck === 'function') {
-    window.__prism_set_cursor_stuck(true, 500, 1070);
-  }
-  assert.equal(appendedHost, null, 'stuck cursor ignored when not in tab-only screencast');
+  // 1. Not in a tab-only screencast: never shown.
+  f.win('mousemove', { clientX: 1900, clientY: 450 });
+  window.__prism_set_cursor_stuck(true, 1930, 450);
+  assert.equal(f.appended.length, 0, 'stuck cursor ignored when not in tab-only screencast');
 
-  // 2. Activate tab screencast
-  for (const fn of winListeners.get('__prism_tab_cast_change__') || []) {
-    fn({ detail: { active: true } });
-  }
+  // 2. Tab screencast active.
+  f.win('__prism_tab_cast_change__', { detail: { active: true } });
   assert.equal(window.__prism_tab_cast_active, true);
 
-  // Now when cursor leaves the tab, fake mouse displays
-  for (const fn of winListeners.get('mousemove') || []) {
-    fn({ clientX: 1900, clientY: 450 });
-  }
-  for (const fn of docListeners.get('mouseleave') || []) {
-    fn({ type: 'mouseleave' });
-  }
+  // In-page boundary events (element blur, mouseout, mouseleave) fire constantly
+  // while clicking and drag-selecting text; they must not show the parked
+  // pointer, which made it flicker in the screencast.
+  f.win('mousemove', { clientX: 1900, clientY: 450 });
+  f.win('blur', { target: { tagName: 'INPUT' } });
+  f.win('mouseout', { relatedTarget: null });
+  f.doc('mouseleave', {});
+  f.doc('mouseout', {});
+  assert.ok(!f.pointer() || f.pointer().style.display !== 'block', 'no parked pointer from in-page events');
 
-  assert.ok(appendedHost, 'cursor host element created and appended when tab cast active');
-  const pointerEl = appendedHost.children?.find(c => c.className === 'prism-cast-pointer');
+  // The main process reports the OS pointer left the view: park at the exit
+  // side, using the last real in-page position (x=1900 -> right edge).
+  window.__prism_set_cursor_stuck(true, 2050, 470);
+  const pointerEl = f.pointer();
   assert.ok(pointerEl, 'pointer element exists inside host');
   assert.equal(pointerEl.style.display, 'block');
-
-  // Since cursor was at x=1900, y=450 on a 1920x1080 view, closest edge is RIGHT
-  // Parked at x = 1920 - 38 = 1882, y = 450
   assert.equal(pointerEl.style.transform, 'translate3d(1882px, 450px, 0)');
-  assert.ok(pointerEl.innerHTML.includes('<svg'), 'contains SVG pointer arrow');
+  assert.ok(pointerEl.innerHTML.includes('<svg'), 'falls back to an SVG arrow');
 
-  // When mouse re-enters (mousemove inside tab), stuck cursor hides
-  for (const fn of winListeners.get('mousemove') || []) {
-    fn({ clientX: 1500, clientY: 500 });
-  }
+  // Moves while outside (drags, synthetic off-screen moves) do not move or hide it.
+  f.win('mousemove', { clientX: -10000, clientY: -10000 });
+  f.win('mousemove', { clientX: 2400, clientY: 500 });
+  assert.equal(pointerEl.style.display, 'block');
+  assert.equal(pointerEl.style.transform, 'translate3d(1882px, 450px, 0)');
+
+  // Back inside: the main process clears it.
+  window.__prism_set_cursor_stuck(false);
   assert.equal(pointerEl.style.display, 'none');
 
-  // Move near top edge (500, 10) and leave: should park at top (500, 38)
-  for (const fn of winListeners.get('mousemove') || []) {
-    fn({ clientX: 500, clientY: 10 });
-  }
-  for (const fn of docListeners.get('mouseleave') || []) {
-    fn({ type: 'mouseleave' });
-  }
-  assert.equal(pointerEl.style.display, 'block');
+  // Leave through the top: park 38px below the top edge.
+  f.win('mousemove', { clientX: 500, clientY: 10 });
+  window.__prism_set_cursor_stuck(true, 500, -20);
   assert.equal(pointerEl.style.transform, 'translate3d(500px, 38px, 0)');
 
-  // Direct trigger from OS cursor tracking
-  window.__prism_set_cursor_stuck(true, 500, 1070);
-  assert.equal(pointerEl.style.display, 'block');
-  assert.equal(pointerEl.style.transform, 'translate3d(500px, 1042px, 0)');
-
-  // Direct trigger with system cursor info (e.g. fetched from OS)
-  const mockSystemCursor = {
-    dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-    width: 28,
-    height: 28,
-    xhot: 5,
-    yhot: 5
-  };
-  window.__prism_set_cursor_stuck(true, 500, 1070, mockSystemCursor);
-  assert.equal(pointerEl.style.display, 'block');
-  assert.ok(pointerEl.innerHTML.includes('<img src="data:image/png;base64,'), 'contains matching system cursor image');
-  
-  assert.equal(pointerEl.style.width, '28px');
-  assert.equal(pointerEl.style.height, '28px');
-  assert.equal(pointerEl.style.marginLeft, '-5px');
-  assert.equal(pointerEl.style.marginTop, '-5px');
-
-  // Stop tab cast: pointer hides immediately
-  for (const fn of winListeners.get('__prism_tab_cast_change__') || []) {
-    fn({ detail: { active: false } });
-  }
+  // Stop tab cast: pointer hides immediately.
+  f.win('__prism_tab_cast_change__', { detail: { active: false } });
   assert.equal(pointerEl.style.display, 'none');
 
   // Disabling spoof mode cleans up host from DOM
   vm.runInContext(buildFocusScript([]), context);
-  assert.equal(appendedHost, null, 'cursor host removed on disable');
+  assert.equal(f.appended.length, 0, 'cursor host removed on disable');
 });
 
-test('screenshare selection hiding injects transparent ::selection style only during active tab screencast and removes on cast end', () => {
+test('screenshare parked pointer matches the OS pointer size through the fullscreen-lock scale and page zoom', () => {
   const rules = [{ host: 'exam.test', focus: true }];
-  const docListeners = new Map();
-  const winListeners = new Map();
+  const f = cursorFixture();
+  const { window } = f;
+  const context = vm.createContext({ document: f.document, window, URL, DOMException });
+  vm.runInContext(buildFocusScript(rules, { screenshareCursor: true }), context);
+  f.win('__prism_tab_cast_change__', { detail: { active: true } });
 
-  let appendedStyle = null;
-  const head = {
-    appendChild(el) { el.parentNode = this; appendedStyle = el; return el; },
-    removeChild(el) { if (appendedStyle === el) { appendedStyle = null; el.parentNode = null; } }
-  };
-  const body = {
-    appendChild(el) { el.parentNode = this; return el; },
-    removeChild() {}
-  };
+  // System cursor metrics are in DIPs. Without a factor from the main process
+  // the page falls back to the fullscreen-lock scale: 32 DIP at scale 0.5 is
+  // 64 CSS px, because the page is drawn at half size.
+  const sysCursor = { dataUrl: 'data:image/png;base64,AAAA', width: 32, height: 32, xhot: 2, yhot: 3 };
+  window.__prism_tab_scale = 0.5;
+  window.__prism_set_cursor_stuck(true, 10, 500, sysCursor);
+  const pointerEl = f.pointer();
+  assert.ok(pointerEl.innerHTML.includes('<img src="data:image/png;base64,AAAA"'));
+  assert.equal(pointerEl.style.width, '64px');
+  assert.equal(pointerEl.style.height, '64px');
+  assert.equal(pointerEl.style.marginLeft, '-4px');
+  assert.equal(pointerEl.style.marginTop, '-6px');
 
-  const document = {
-    head,
-    body,
-    documentElement: head,
-    location: { href: 'https://exam.test/quiz' },
-    hasFocus() { return true; },
-    createElement(tag) {
-      const el = {
-        tagName: tag.toUpperCase(),
-        style: {},
-        setAttribute(k, v) { this[k] = v; },
-        appendChild(child) { return child; },
-        remove() { if (appendedStyle === this) appendedStyle = null; this.parentNode = null; },
-        parentNode: null
-      };
-      return el;
-    },
-    addEventListener(type, fn) {
-      const set = docListeners.get(type) || new Set();
-      set.add(fn);
-      docListeners.set(type, set);
-    },
-    removeEventListener(type, fn) {
-      docListeners.get(type)?.delete(fn);
-    }
-  };
+  // The main process factor also includes page zoom (here scale 0.5 x zoom 1.25).
+  window.__prism_set_cursor_stuck(true, 10, 500, sysCursor, 1 / (0.5 * 1.25));
+  assert.equal(pointerEl.style.width, '51.2px');
 
-  const window = {
-    innerWidth: 1920,
-    innerHeight: 1080,
-    addEventListener(type, fn) {
-      const set = winListeners.get(type) || new Set();
-      set.add(fn);
-      winListeners.set(type, set);
-    },
-    removeEventListener(type, fn) {
-      winListeners.get(type)?.delete(fn);
-    }
-  };
+  // Entering fullscreen while parked: the lock scale becomes 1, the pointer follows.
+  window.__prism_tab_scale = 1;
+  f.win('__prism_tab_scale_change__', { detail: { scale: 1 } });
+  assert.equal(pointerEl.style.width, '25.6px');
+  assert.equal(pointerEl.style.marginLeft, '-1.6px');
+});
 
-  const context = vm.createContext({ document, window, URL, DOMException });
-  vm.runInContext(buildFocusScript(rules, { screenshareHideSelection: true }), context);
-
-  // Initially not in screencast: no style tag injected
-  assert.equal(appendedStyle, null, 'style not injected when not tab casting');
-
-  // Start tab screencast
-  for (const fn of winListeners.get('__prism_tab_cast_change__') || []) {
-    fn({ detail: { active: true } });
-  }
-
-  assert.ok(appendedStyle, 'style element injected when tab casting starts');
-  assert.equal(appendedStyle.id, '__prism_selection_hide_style__');
-  assert.ok(appendedStyle.textContent.includes('::selection'));
-  assert.ok(appendedStyle.textContent.includes('background: transparent !important'));
-  assert.ok(appendedStyle.textContent.includes('-webkit-text-fill-color: inherit !important'));
-
-  // End tab screencast
-  for (const fn of winListeners.get('__prism_tab_cast_change__') || []) {
-    fn({ detail: { active: false } });
-  }
-  assert.equal(appendedStyle, null, 'style element removed when tab casting ends');
-
-  // If screenshareHideSelection is disabled:
-  const doc2Listeners = new Map();
-  const win2Listeners = new Map();
-  let appendedStyle2 = null;
-  const head2 = {
-    appendChild(el) { el.parentNode = this; appendedStyle2 = el; return el; },
-    removeChild(el) { if (appendedStyle2 === el) { appendedStyle2 = null; el.parentNode = null; } }
-  };
-  const doc2 = {
-    head: head2,
-    body,
-    documentElement: head2,
-    location: { href: 'https://exam.test/quiz' },
-    hasFocus() { return true; },
-    createElement: document.createElement,
-    addEventListener(type, fn) {
-      const set = doc2Listeners.get(type) || new Set();
-      set.add(fn);
-      doc2Listeners.set(type, set);
-    },
-    removeEventListener(type, fn) {
-      doc2Listeners.get(type)?.delete(fn);
-    }
-  };
-  const win2 = {
-    __prism_tab_cast_active: true,
-    addEventListener(type, fn) {
-      const set = win2Listeners.get(type) || new Set();
-      set.add(fn);
-      win2Listeners.set(type, set);
-    },
-    removeEventListener(type, fn) {
-      win2Listeners.get(type)?.delete(fn);
-    }
-  };
-  const contextDisabled = vm.createContext({ document: doc2, window: win2, URL, DOMException });
-  vm.runInContext(buildFocusScript(rules, { screenshareHideSelection: false, isSharedTab: true }), contextDisabled);
-  assert.equal(appendedStyle2, null, 'style not injected when screenshareHideSelection is false even during cast');
+test('screenshare never hides text selection with an injected ::selection style', () => {
+  const rules = [{ host: 'exam.test', focus: true }];
+  const f = cursorFixture();
+  const context = vm.createContext({ document: f.document, window: f.window, URL, DOMException });
+  vm.runInContext(buildFocusScript(rules, { screenshareHideSelection: true, isSharedTab: true }), context);
+  f.win('__prism_tab_cast_change__', { detail: { active: true } });
+  f.doc('DOMContentLoaded');
+  assert.equal(f.appended.filter(el => el.tagName === 'STYLE').length, 0);
+  assert.equal(buildFocusScript(rules, {}).includes('__prism_selection_hide_style__'), false);
 });
 
 test('FocusController scales view metrics down to fit non-fullscreen view without changing target resolution', () => {

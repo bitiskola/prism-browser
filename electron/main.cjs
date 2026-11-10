@@ -16,6 +16,7 @@ const { AdblockController, normalizeAdblockSettings } = require('./adblock.cjs')
 const { ClipboardTyping } = require('./clipboard-typing.cjs');
 const { handleDisplayMediaSelection } = require('./screenshare.cjs');
 const { getSystemCursorInfo } = require('./cursor-theme.cjs');
+const { resetCaptureCursorOverlay, runSharedResize } = require('./cast-sync.cjs');
 
 app.setName('Prism Browser');
 if (process.platform === 'linux') app.setDesktopName('prism-browser.desktop');
@@ -99,7 +100,36 @@ function getFullscreenResolution() {
 let cursorTrackingTimer = null;
 let lastStuckState = false;
 let lastSharedInside = true;
-let offScreenDispatchesRemaining = 0;
+let pendingOverlayReset = false;
+// The page (or iframe) that called getDisplayMedia for the current tab share.
+// Its screencast transformer reads the crop scale and the resize hold.
+let castRequestFrame = null;
+let castRequestTabId = null;
+// Only spoof-mode requesters run the crop transformer that honors the hold.
+let castRequestSpoofed = false;
+
+function displayScaleFactor() {
+  try {
+    if (win && !win.isDestroyed()) return screen.getDisplayMatching(win.getBounds())?.scaleFactor || 1;
+  } catch {}
+  return 1;
+}
+
+function currentSystemCursor(forceRefresh = false) {
+  return getSystemCursorInfo({ scaleFactor: displayScaleFactor(), forceRefresh });
+}
+
+// Emulated CSS pixels per screen DIP for a tab: the fullscreen lock scales the
+// page down to fit the view, and page zoom scales it up.
+function tabCssPerDip(tab) {
+  let scale = 1;
+  if (tab.spoofOnLoad && data.spoof?.fullscreen !== false && focus?.computeScale) {
+    scale = focus.computeScale(tab.id, getFullscreenResolution()) || 1;
+  }
+  let zoom = 1;
+  try { zoom = tab.view.webContents.getZoomFactor() || 1; } catch {}
+  return 1 / (scale * zoom);
+}
 
 function startCursorTracking() {
   if (cursorTrackingTimer) return;
@@ -110,43 +140,33 @@ function startCursorTracking() {
       const cursorPoint = screen.getCursorScreenPoint();
       const contentBounds = win.getContentBounds();
 
-      // Tab screensharing: prevent real cursor from freezing at view edges/corners in capture stream
+      // Tab screensharing: remove the real pointer from the capture as soon as it leaves the shared view.
       const sharedTab = sharedTabId ? tabs.get(sharedTabId) : null;
       if (sharedTab && sharedTab.view && !sharedTab.view.webContents.isDestroyed()) {
         const sBounds = sharedTab.view.getBounds();
-        const sharedScreenRect = {
-          x: contentBounds.x + sBounds.x,
-          y: contentBounds.y + sBounds.y,
-          width: sBounds.width,
-          height: sBounds.height
-        };
         const isSharedInside = (
-          cursorPoint.x >= sharedScreenRect.x &&
-          cursorPoint.x < sharedScreenRect.x + sharedScreenRect.width &&
-          cursorPoint.y >= sharedScreenRect.y &&
-          cursorPoint.y < sharedScreenRect.y + sharedScreenRect.height &&
+          cursorPoint.x >= contentBounds.x + sBounds.x &&
+          cursorPoint.x < contentBounds.x + sBounds.x + sBounds.width &&
+          cursorPoint.y >= contentBounds.y + sBounds.y &&
+          cursorPoint.y < contentBounds.y + sBounds.y + sBounds.height &&
           win.isFocused()
         );
-
         if (!isSharedInside) {
           if (lastSharedInside) {
             lastSharedInside = false;
-            offScreenDispatchesRemaining = 2;
+            pendingOverlayReset = true;
           }
-          if (offScreenDispatchesRemaining > 0) {
-            offScreenDispatchesRemaining--;
-            try {
-              sharedTab.view.webContents.sendInputEvent({ type: 'mouseMove', x: -10000, y: -10000 });
-              sharedTab.view.webContents.sendInputEvent({ type: 'mouseLeave', x: -10000, y: -10000 });
-            } catch {}
-          }
+          if (pendingOverlayReset && resetCaptureCursorOverlay(sharedTab, {
+            windowFocused: win.isFocused(),
+            focusSpoofed: Boolean(sharedTab.spoofOnLoad && data.spoof?.focusVisibility !== false)
+          })) pendingOverlayReset = false;
         } else {
           lastSharedInside = true;
-          offScreenDispatchesRemaining = 0;
+          pendingOverlayReset = false;
         }
       } else {
         lastSharedInside = true;
-        offScreenDispatchesRemaining = 0;
+        pendingOverlayReset = false;
       }
 
       const optCursor = data.spoof?.screenshareCursor !== false;
@@ -189,16 +209,65 @@ function startCursorTracking() {
       const isOutside = !isInside;
       if (isOutside !== lastStuckState) {
         lastStuckState = isOutside;
-        const scale = focus.computeScale ? focus.computeScale(targetTab.id, getFullscreenResolution()) : 1;
-        const relX = Math.round((cursorPoint.x - viewScreenRect.x) / (scale || 1));
-        const relY = Math.round((cursorPoint.y - viewScreenRect.y) / (scale || 1));
-        const sysCursor = getSystemCursorInfo();
+        const cssPerDip = tabCssPerDip(targetTab);
+        const relX = Math.round((cursorPoint.x - viewScreenRect.x) * cssPerDip);
+        const relY = Math.round((cursorPoint.y - viewScreenRect.y) * cssPerDip);
+        const sysCursor = currentSystemCursor();
         targetTab.view.webContents.executeJavaScript(
-          'try { window.__prism_set_cursor_stuck?.(' + isOutside + ', ' + relX + ', ' + relY + ', ' + JSON.stringify(sysCursor) + '); } catch {} void 0;'
+          'try { window.__prism_set_cursor_stuck?.(' + isOutside + ', ' + relX + ', ' + relY + ', ' + JSON.stringify(sysCursor) + ', ' + cssPerDip + '); } catch {} void 0;'
         ).catch(() => {});
       }
     } catch {}
   }, 25);
+}
+
+// Runs a small script in the page/frame that requested the current tab share,
+// where the screencast crop transformer lives.
+function runInCastRequester(script, timeoutMs = 0) {
+  const code = `try { ${script} } catch {} void 0;`;
+  let run = null;
+  try {
+    if (castRequestFrame && !castRequestFrame.isDestroyed?.()) run = castRequestFrame.executeJavaScript(code);
+    else {
+      const tab = castRequestTabId ? tabs.get(castRequestTabId) : null;
+      if (tab && !tab.view.webContents.isDestroyed()) run = tab.view.webContents.executeJavaScript(code);
+    }
+  } catch {}
+  const done = Promise.resolve(run).catch(() => {});
+  return timeoutMs ? Promise.race([done, new Promise(r => setTimeout(r, timeoutMs))]) : done;
+}
+
+function broadcastTabScale(scale) {
+  const scaleScript = `try { window.__prism_tab_scale = ${scale}; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: ${scale} } })); } catch {} void 0;`;
+  for (const tab of tabs.values()) {
+    if (tab.view && !tab.view.webContents.isDestroyed()) {
+      tab.view.webContents.executeJavaScript(scaleScript).catch(() => {});
+    }
+  }
+  // An iframe requester has its own window; main-frame broadcasts miss it.
+  if (castRequestFrame && !castRequestFrame.isDestroyed?.() && castRequestFrame.parent) {
+    castRequestFrame.executeJavaScript(scaleScript).catch(() => {});
+  }
+}
+
+function applyTabBounds(tab, bounds) {
+  const fullscreenLocked = Boolean(tab.spoofOnLoad && data.spoof?.fullscreen !== false);
+  const current = tab.view.getBounds();
+  const sizeChanged = current.width !== bounds.width || current.height !== bounds.height;
+  if (fullscreenLocked && tab.id === sharedTabId && (sizeChanged || tab.resizeRunning)) {
+    tab.pendingBounds = bounds;
+    void runSharedResize(tab, {
+      // Safety expiry: the hold always ends, even if the release never arrives.
+      hold: () => castRequestSpoofed ? runInCastRequester('window.__prism_tab_scale_hold_until = performance.now() + 1500;', 60) : Promise.resolve(),
+      // The short tail covers frames already in flight.
+      release: () => { if (castRequestSpoofed) void runInCastRequester('window.__prism_tab_scale_hold_until = performance.now() + 80;'); },
+      isAlive: t => tabs.get(t.id) === t && !t.view.webContents.isDestroyed(),
+      updateMetrics: id => focus.updateMetrics(id),
+    });
+    return;
+  }
+  tab.view.setBounds(bounds);
+  if (fullscreenLocked) focus.updateMetrics(tab.id);
 }
 
 function stopCursorTracking() {
@@ -210,7 +279,7 @@ function stopCursorTracking() {
 
 const focus = new FocusController({ getRules: () => data.rules,
   getTargetResolution: () => getFullscreenResolution(),
-  getSystemCursor: () => getSystemCursorInfo(),
+  getSystemCursor: () => currentSystemCursor(),
   getSharedTabId: () => sharedTabId,
   getViewBounds: id => {
     const tab = tabs.get(id);
@@ -224,12 +293,7 @@ const focus = new FocusController({ getRules: () => data.rules,
       const effectiveScale = isSharedSpoofed ? scale : 1;
       if (lastBroadcastScale !== effectiveScale) {
         lastBroadcastScale = effectiveScale;
-        const scaleScript = `try { window.__prism_tab_scale = ${effectiveScale}; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: ${effectiveScale} } })); } catch {} void 0;`;
-        for (const tab of tabs.values()) {
-          if (tab.view && !tab.view.webContents.isDestroyed()) {
-            tab.view.webContents.executeJavaScript(scaleScript).catch(() => {});
-          }
-        }
+        broadcastTabScale(effectiveScale);
       }
     }
   },
@@ -356,8 +420,9 @@ function layout() {
     tab.view.setVisible(Boolean(show));
     if (show) {
       const isFull = (Boolean(tab.isHtmlFullScreen) || isWindowFull) && (tab.id === activeTabId);
+      let bounds;
       if (isFull) {
-        tab.view.setBounds({ x: 0, y: 0, width, height });
+        bounds = { x: 0, y: 0, width, height };
       } else {
         const availX = Math.max(0, Math.min(width, Math.round(viewport.x)));
         const availY = Math.max(0, Math.min(height, Math.round(viewport.y)));
@@ -373,14 +438,12 @@ function layout() {
           const fitH = Math.max(1, Math.round(targetH * scale));
           const offsetX = Math.round((availW - fitW) / 2);
           const offsetY = Math.round((availH - fitH) / 2);
-          tab.view.setBounds({ x: availX + offsetX, y: availY + offsetY, width: fitW, height: fitH });
+          bounds = { x: availX + offsetX, y: availY + offsetY, width: fitW, height: fitH };
         } else {
-          tab.view.setBounds({ x: availX, y: availY, width: availW, height: availH });
+          bounds = { x: availX, y: availY, width: availW, height: availH };
         }
       }
-      if (tab.spoofOnLoad && data.spoof?.fullscreen !== false) {
-        focus.updateMetrics(tab.id);
-      }
+      applyTabBounds(tab, bounds);
     }
   }
   if (active && win.contentView.children.includes(active.view) && viewport.visible) {
@@ -469,6 +532,14 @@ async function createTab(url = 'about:blank', activate = true) {
   win.contentView.addChildView(view);
   view.setVisible(false);
   const update = () => { scheduleState(); scheduleSave(); };
+  // Tracks held buttons so the capture-cursor reset never cancels a drag.
+  wc.on('before-mouse-event', (_event, mouse) => {
+    if (mouse?.type === 'mouseDown') tab.mouseButtonDown = true;
+    else if (mouse?.type === 'mouseUp') tab.mouseButtonDown = false;
+    else if (mouse?.type === 'mouseMove' || mouse?.type === 'mouseLeave') {
+      tab.mouseButtonDown = Array.isArray(mouse.modifiers) && mouse.modifiers.some(m => /buttondown$/i.test(m));
+    }
+  });
   wc.on('did-start-loading', () => { tab.loading = true; update(); });
   wc.on('did-stop-loading', () => { tab.loading = false; update(); });
   wc.on('page-title-updated', (_event, title) => { tab.title = title || 'Untitled'; const visit = data.history.find(h => h.url === tab.url); if (visit) visit.title = tab.title; update(); });
@@ -812,8 +883,13 @@ async function configureSession() {
 
         if (selection.type === 'tab') {
           sharedTabId = selection.id;
+          castRequestFrame = requestingFrame || null;
+          castRequestTabId = requestingTab?.id ?? null;
+          castRequestSpoofed = Boolean(isSpoofActive);
           lastSharedInside = true;
-          offScreenDispatchesRemaining = 0;
+          pendingOverlayReset = false;
+          // Pick up cursor theme/size changes made since the last share.
+          currentSystemCursor(true);
           layout();
           const chosen = availableTabs.find(t => t.id === selection.id);
           const isChosenSpoofed = Boolean(chosen && chosen.spoofOnLoad && data.spoof?.fullscreen !== false);
@@ -843,7 +919,7 @@ async function configureSession() {
               const endedSharedId = sharedTabId;
               sharedTabId = null;
               lastSharedInside = true;
-              offScreenDispatchesRemaining = 0;
+              pendingOverlayReset = false;
               setCastState(false);
               const resetScript = `try { window.__prism_tab_scale = 1; window.__prism_tab_cast_active = false; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: 1 } })); window.dispatchEvent(new CustomEvent('__prism_tab_cast_change__', { detail: { active: false } })); } catch {} void 0;`;
               for (const tab of tabs.values()) {
@@ -851,6 +927,10 @@ async function configureSession() {
                   tab.view.webContents.executeJavaScript(resetScript).catch(() => {});
                 }
               }
+              if (castRequestSpoofed) void runInCastRequester('window.__prism_tab_scale_hold_until = 0;');
+              castRequestFrame = null;
+              castRequestTabId = null;
+              castRequestSpoofed = false;
               layout();
               const endedTab = tabs.get(endedSharedId);
               if (endedTab?.spoofOnLoad && data.spoof?.fullscreen !== false && focus && typeof focus.updateMetrics === 'function') {

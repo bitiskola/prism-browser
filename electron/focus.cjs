@@ -263,7 +263,6 @@ function patchDocument(rules, spoofOptions = {}) {
   const optSelection = spoofOptions.selection !== false;
   const optScreenshare = spoofOptions.screenshare !== false;
   const optScreenshareCursor = spoofOptions.screenshareCursor !== false;
-  const optScreenshareHideSelection = spoofOptions.screenshareHideSelection !== false;
   const optOsPlatform = spoofOptions.osPlatform !== false;
   const targetPlatformKey = spoofOptions.platform || 'win64';
   const optBrowser = spoofOptions.browserIdentity !== false;
@@ -272,7 +271,6 @@ function patchDocument(rules, spoofOptions = {}) {
   let activeCastTracksCount = 0;
   let cursorHost = null;
   let cursorEl = null;
-  let selectionHideStyle = null;
 
   const descriptors = [];
   const listeners = [];
@@ -316,15 +314,6 @@ function patchDocument(rules, spoofOptions = {}) {
       } catch {}
       cursorHost = null;
       cursorEl = null;
-    }
-    if (selectionHideStyle) {
-      try {
-        if (typeof selectionHideStyle.remove === 'function') selectionHideStyle.remove();
-        else if (selectionHideStyle.parentNode && typeof selectionHideStyle.parentNode.removeChild === 'function') {
-          selectionHideStyle.parentNode.removeChild(selectionHideStyle);
-        }
-      } catch {}
-      selectionHideStyle = null;
     }
     try { delete window.__prism_report_display_surface; } catch {}
     try { delete window.__prism_set_cursor_stuck; } catch {}
@@ -928,6 +917,18 @@ function patchDocument(rules, spoofOptions = {}) {
 
                 const transformer = new TransformStream({
                   async transform(frame, controller) {
+                    // While the shared tab's view and emulation scale change
+                    // (fullscreen enter/exit), frames briefly arrive at another
+                    // size and with the painted scale out of step with
+                    // __prism_tab_scale. Drop them so viewers keep the last
+                    // good frame instead of seeing a zoom jump. The main
+                    // process always sets a short expiry, so this cannot
+                    // freeze the stream for long.
+                    const holdUntil = window.__prism_tab_scale_hold_until;
+                    if (typeof holdUntil === 'number' && performance.now() < holdUntil) {
+                      try { frame.close(); } catch {}
+                      return;
+                    }
                     try {
                       const scale = (typeof window.__prism_tab_scale === 'number' && window.__prism_tab_scale > 0)
                         ? window.__prism_tab_scale
@@ -1018,245 +1019,169 @@ function patchDocument(rules, spoofOptions = {}) {
     }
   }
 
-  // Screenshare selection hiding: hides text selection highlights in screencast when active and enabled
-  const updateSelectionHiding = (forcedActive) => {
-    if (!optScreenshareHideSelection) {
-      if (selectionHideStyle) {
-        try {
-          if (typeof selectionHideStyle.remove === 'function') selectionHideStyle.remove();
-          else if (selectionHideStyle.parentNode && typeof selectionHideStyle.parentNode.removeChild === 'function') {
-            selectionHideStyle.parentNode.removeChild(selectionHideStyle);
-          }
-        } catch {}
-        selectionHideStyle = null;
-      }
-      return;
-    }
-
-    const isCasting = (typeof forcedActive === 'boolean')
-      ? forcedActive
-      : Boolean(typeof window !== 'undefined' && window.__prism_tab_cast_active);
-
-    if (isCasting) {
-      if (!selectionHideStyle || (!selectionHideStyle.isConnected && !selectionHideStyle.parentNode)) {
-        if (typeof document === 'undefined') return;
-        const target = document.head || document.documentElement || document.body;
-        if (!target) return;
-        selectionHideStyle = document.createElement('style');
-        selectionHideStyle.id = '__prism_selection_hide_style__';
-        selectionHideStyle.textContent = [
-          '::selection, *::selection, html::selection, body::selection, div::selection, span::selection, p::selection, a::selection, h1::selection, h2::selection, h3::selection, h4::selection, h5::selection, h6::selection, input::selection, textarea::selection, [contenteditable]::selection, button::selection, li::selection, table::selection, td::selection, th::selection {',
-          '  background: transparent !important;',
-          '  background-color: transparent !important;',
-          '  color: inherit !important;',
-          '  -webkit-text-fill-color: inherit !important;',
-          '  text-shadow: none !important;',
-          '}',
-          '::-moz-selection, *::-moz-selection, html::-moz-selection, body::-moz-selection, div::-moz-selection, span::-moz-selection, p::-moz-selection, a::-moz-selection, h1::-moz-selection, h2::-moz-selection, h3::-moz-selection, h4::-moz-selection, h5::-moz-selection, h6::-moz-selection, input::-moz-selection, textarea::-moz-selection, [contenteditable]::-moz-selection, button::-moz-selection, li::-moz-selection, table::-moz-selection, td::-moz-selection, th::-moz-selection {',
-          '  background: transparent !important;',
-          '  background-color: transparent !important;',
-          '  color: inherit !important;',
-          '  -webkit-text-fill-color: inherit !important;',
-          '  text-shadow: none !important;',
-          '}'
-        ].join('\n');
-        try { target.appendChild(selectionHideStyle); } catch {}
-        if (!selectionHideStyle.parentNode) {
-          selectionHideStyle.parentNode = target;
-        }
-      }
-    } else {
-      if (selectionHideStyle) {
-        try {
-          if (typeof selectionHideStyle.remove === 'function') selectionHideStyle.remove();
-          else if (selectionHideStyle.parentNode && typeof selectionHideStyle.parentNode.removeChild === 'function') {
-            selectionHideStyle.parentNode.removeChild(selectionHideStyle);
-          }
-        } catch {}
-        selectionHideStyle = null;
-      }
-    }
-  };
-
-  // Screenshare cursor containment: when casting tab, keep cursor visible parked ~1cm from exit boundary
+  // Screenshare cursor containment: while this tab is shared as a tab-only
+  // screencast and the real pointer is outside it, show a pointer parked ~1cm
+  // inside the edge it left through. The main process owns the inside/outside
+  // decision because it sees the OS pointer. In-page boundary events (element
+  // blur, mouseout) fire constantly while clicking or drag-selecting text and
+  // made the parked pointer flicker in the screencast.
   let onCursorCastChange;
-  let showStuckCursor;
   if (optScreenshareCursor) {
     const MARGIN_CM = 38; // ~1cm at standard 96 CSS DPI
     const targetW = (spoofOptions.targetResolution && spoofOptions.targetResolution.width) || 1920;
     const targetH = (spoofOptions.targetResolution && spoofOptions.targetResolution.height) || 1080;
-    let lastX = Math.round(targetW / 2);
-    let lastY = Math.round(targetH / 2);
-    if (typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth > 0) {
-      lastX = Math.round(window.innerWidth / 2);
-      lastY = Math.round(window.innerHeight / 2);
-    }
+    const viewW = () => (typeof window !== 'undefined' && window.innerWidth) || targetW;
+    const viewH = () => (typeof window !== 'undefined' && window.innerHeight) || targetH;
+    let lastX = Math.round(viewW() / 2);
+    let lastY = Math.round(viewH() / 2);
+    let hasInsidePosition = false;
+    let cursorInfo = (spoofOptions.systemCursor && typeof spoofOptions.systemCursor === 'object') ? spoofOptions.systemCursor : null;
+    let dipToCss = null;
+    let dipToCssScale = 1;
+    let renderedKey = '';
 
     const isTopLevel = typeof window === 'undefined' || !window.top || window.top === window;
-
-    const isTabCasting = () => {
-      return optScreenshareCursor !== false && Boolean(typeof window !== 'undefined' && window.__prism_tab_cast_active);
+    const isTabCasting = () => Boolean(typeof window !== 'undefined' && window.__prism_tab_cast_active);
+    const num = (value, fallback) => (typeof value === 'number' && Number.isFinite(value) ? value : fallback);
+    const px = value => `${Math.round(value * 1000) / 1000}px`;
+    // Cursor metrics are in DIPs (what the OS draws). The page's CSS pixels are
+    // scaled by the fullscreen-lock emulation (and page zoom), so convert them.
+    const tabScale = () => (typeof window !== 'undefined' && typeof window.__prism_tab_scale === 'number' && window.__prism_tab_scale > 0) ? window.__prism_tab_scale : 1;
+    const cssPerDip = () => {
+      // The main process's factor also covers page zoom; follow later
+      // fullscreen-lock scale changes relative to the scale it was taken at.
+      if (typeof dipToCss === 'number' && dipToCss > 0 && Number.isFinite(dipToCss)) return dipToCss * dipToCssScale / tabScale();
+      return 1 / tabScale();
     };
 
     let pointerEl = null;
-
     const ensureOverlayElement = () => {
-      if (!isTopLevel) return null;
+      if (!isTopLevel || typeof document === 'undefined') return null;
       if (pointerEl && cursorHost && (cursorHost.isConnected || cursorHost.parentNode)) return pointerEl;
-      if (typeof document === 'undefined') return null;
       const parent = document.documentElement || document.body;
       if (!parent) return null;
-
-      if (!cursorHost || (!cursorHost.isConnected && !cursorHost.parentNode)) {
-        cursorHost = document.createElement('div');
-        cursorHost.id = '__prism_cast_cursor_host__';
-        cursorHost.setAttribute('aria-hidden', 'true');
-        cursorHost.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;pointer-events:none !important;overflow:visible;';
-
-        const pointer = document.createElement('div');
-        pointer.id = '__prism_cast_pointer__';
-        pointer.className = 'prism-cast-pointer';
-        const curInfo = spoofOptions.systemCursor;
-        const curW = (curInfo && typeof curInfo.width === 'number') ? curInfo.width : 24;
-        const curH = (curInfo && typeof curInfo.height === 'number') ? curInfo.height : 24;
-        const curXHot = (curInfo && typeof curInfo.xhot === 'number') ? curInfo.xhot : 4;
-        const curYHot = (curInfo && typeof curInfo.yhot === 'number') ? curInfo.yhot : 4;
-        pointer.style.cssText = 'position:fixed;top:0;left:0;width:' + curW + 'px;height:' + curH + 'px;margin-left:-' + curXHot + 'px;margin-top:-' + curYHot + 'px;pointer-events:none !important;user-select:none !important;z-index:2147483647 !important;filter:drop-shadow(1px 2px 2px rgba(0,0,0,0.4));display:none;';
-        if (curInfo && curInfo.dataUrl) {
-          pointer.innerHTML = '<img src="' + curInfo.dataUrl + '" style="width:' + curW + 'px;height:' + curH + 'px;display:block;pointer-events:none;" draggable="false" />';
-        } else {
-          pointer.innerHTML = '<svg width="' + curW + '" height="' + curH + '" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 2 L4 20 L8.5 15.5 L12.5 23 L15.5 21.5 L11.5 14 L17.5 14 Z" fill="#FFFFFF" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>';
-        }
-
-        cursorHost.appendChild(pointer);
-        parent.appendChild(cursorHost);
-        if (!cursorHost.parentNode) cursorHost.parentNode = parent;
-        pointerEl = pointer;
-        cursorEl = pointer;
-      }
+      cursorHost = document.createElement('div');
+      cursorHost.id = '__prism_cast_cursor_host__';
+      cursorHost.setAttribute('aria-hidden', 'true');
+      cursorHost.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;pointer-events:none !important;overflow:visible;';
+      const pointer = document.createElement('div');
+      pointer.id = '__prism_cast_pointer__';
+      pointer.className = 'prism-cast-pointer';
+      pointer.style.cssText = 'position:fixed;top:0;left:0;pointer-events:none !important;user-select:none !important;z-index:2147483647 !important;display:none;';
+      cursorHost.appendChild(pointer);
+      parent.appendChild(cursorHost);
+      if (!cursorHost.parentNode) cursorHost.parentNode = parent;
+      pointerEl = pointer;
+      cursorEl = pointer;
+      renderedKey = '';
       return pointerEl;
     };
 
-    const hideOverlay = () => {
-      if (pointerEl) {
-        pointerEl.style.display = 'none';
-      } else if (cursorEl) {
-        cursorEl.style.display = 'none';
-      }
+    const renderCursorImage = el => {
+      const info = cursorInfo && cursorInfo.dataUrl ? cursorInfo : null;
+      const k = cssPerDip();
+      const key = `${info ? info.dataUrl.length + ':' + info.dataUrl.slice(-32) : 'svg'}|${info ? [info.width, info.height, info.xhot, info.yhot] : ''}|${k}`;
+      if (key === renderedKey) return;
+      renderedKey = key;
+      const w = num(info && info.width, 24) * k;
+      const h = num(info && info.height, 24) * k;
+      el.style.width = px(w);
+      el.style.height = px(h);
+      el.style.marginLeft = px(-num(info && info.xhot, 4) * k);
+      el.style.marginTop = px(-num(info && info.yhot, 4) * k);
+      el.innerHTML = info
+        ? '<img src="' + info.dataUrl + '" style="width:100%;height:100%;display:block;pointer-events:none;" draggable="false" />'
+        : '<svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 2 L4 20 L8.5 15.5 L12.5 23 L15.5 21.5 L11.5 14 L17.5 14 Z" fill="#FFFFFF" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>';
     };
 
-    showStuckCursor = () => {
+    const hideOverlay = () => {
+      if (pointerEl) pointerEl.style.display = 'none';
+      else if (cursorEl) cursorEl.style.display = 'none';
+    };
+
+    const showParked = () => {
       if (!isTabCasting() || !isTopLevel) {
         hideOverlay();
         return;
       }
-      const W = (typeof window !== 'undefined' && window.innerWidth) || targetW;
-      const H = (typeof window !== 'undefined' && window.innerHeight) || targetH;
-
-      const dLeft = Math.max(0, lastX);
-      const dRight = Math.max(0, W - lastX);
-      const dTop = Math.max(0, lastY);
-      const dBottom = Math.max(0, H - lastY);
-      const minD = Math.min(dLeft, dRight, dTop, dBottom);
-
-      let parkX = lastX;
-      let parkY = lastY;
-
-      if (minD === dLeft) {
+      const W = viewW();
+      const H = viewH();
+      const x = Math.max(0, Math.min(W, lastX));
+      const y = Math.max(0, Math.min(H, lastY));
+      const minD = Math.min(x, W - x, y, H - y);
+      let parkX;
+      let parkY;
+      if (minD === x) {
         parkX = MARGIN_CM;
-        parkY = Math.max(MARGIN_CM, Math.min(H - MARGIN_CM, lastY));
-      } else if (minD === dRight) {
+        parkY = Math.max(MARGIN_CM, Math.min(H - MARGIN_CM, y));
+      } else if (minD === W - x) {
         parkX = W - MARGIN_CM;
-        parkY = Math.max(MARGIN_CM, Math.min(H - MARGIN_CM, lastY));
-      } else if (minD === dTop) {
-        parkX = Math.max(MARGIN_CM, Math.min(W - MARGIN_CM, lastX));
+        parkY = Math.max(MARGIN_CM, Math.min(H - MARGIN_CM, y));
+      } else if (minD === y) {
+        parkX = Math.max(MARGIN_CM, Math.min(W - MARGIN_CM, x));
         parkY = MARGIN_CM;
       } else {
-        parkX = Math.max(MARGIN_CM, Math.min(W - MARGIN_CM, lastX));
+        parkX = Math.max(MARGIN_CM, Math.min(W - MARGIN_CM, x));
         parkY = H - MARGIN_CM;
       }
-
       const el = ensureOverlayElement();
-      if (el) {
-        el.style.transform = 'translate3d(' + Math.round(parkX) + 'px, ' + Math.round(parkY) + 'px, 0)';
-        el.style.display = 'block';
-      }
+      if (!el) return;
+      renderCursorImage(el);
+      el.style.transform = 'translate3d(' + Math.round(parkX) + 'px, ' + Math.round(parkY) + 'px, 0)';
+      el.style.display = 'block';
     };
 
+    // Only remember where the pointer really was inside the page; positions
+    // outside the viewport come from drags or synthetic events, not from the
+    // edge the user actually left through.
     const onMove = e => {
-      if (e && typeof e.clientX === 'number' && typeof e.clientY === 'number') {
-        lastX = e.clientX;
-        lastY = e.clientY;
-      }
-      hideOverlay();
-    };
-
-    const onLeave = e => {
-      if (!isTabCasting()) return;
-      if (e && (e.type === 'mouseleave' || e.type === 'mouseout')) {
-        if (e.relatedTarget || e.toElement) return;
-      }
-      showStuckCursor();
+      if (!e || e.isTrusted === false || typeof e.clientX !== 'number' || typeof e.clientY !== 'number') return;
+      if (e.clientX < 0 || e.clientY < 0 || e.clientX >= viewW() || e.clientY >= viewH()) return;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      hasInsidePosition = true;
     };
 
     onCursorCastChange = (e) => {
       const active = (e && e.detail && typeof e.detail.active === 'boolean') ? e.detail.active : isTabCasting();
-      if (!active || !optScreenshareCursor) {
+      if (!active) {
         hideOverlay();
+        hasInsidePosition = false;
       }
     };
 
     if (typeof window !== 'undefined') {
-      window.__prism_set_cursor_stuck = function(stuck, relX, relY, customCursor) {
+      window.__prism_set_cursor_stuck = function(stuck, relX, relY, customCursor, cssPerDipFactor) {
+        if (customCursor && typeof customCursor === 'object' && customCursor.dataUrl) cursorInfo = customCursor;
+        if (typeof cssPerDipFactor === 'number' && cssPerDipFactor > 0 && Number.isFinite(cssPerDipFactor)) {
+          dipToCss = cssPerDipFactor;
+          dipToCssScale = tabScale();
+        }
         if (!stuck || !isTabCasting()) {
           hideOverlay();
           return;
         }
-        if (typeof relX === 'number' && typeof relY === 'number') {
+        // Prefer the last real in-page position: the main process samples the
+        // OS pointer slightly after it left, when it may already be far away.
+        if (!hasInsidePosition && typeof relX === 'number' && typeof relY === 'number') {
           lastX = relX;
           lastY = relY;
         }
-        if (customCursor && typeof customCursor === 'object' && customCursor.dataUrl) {
-          const el = ensureOverlayElement();
-          if (el) {
-            const w = customCursor.width || 24;
-            const h = customCursor.height || 24;
-            const xh = typeof customCursor.xhot === 'number' ? customCursor.xhot : 4;
-            const yh = typeof customCursor.yhot === 'number' ? customCursor.yhot : 4;
-            try {
-              if (typeof el.style.setProperty === 'function') {
-                el.style.setProperty('width', w + 'px');
-                el.style.setProperty('height', h + 'px');
-              }
-              Object.defineProperty(el.style, 'width', { value: w + 'px', writable: true, configurable: true, enumerable: true });
-              Object.defineProperty(el.style, 'height', { value: h + 'px', writable: true, configurable: true, enumerable: true });
-            } catch {}
-            el.style.width = w + 'px';
-            el.style.height = h + 'px';
-            el.style.marginLeft = -xh + 'px';
-            el.style.marginTop = -yh + 'px';
-            el.innerHTML = '<img src="' + customCursor.dataUrl + '" style="width:' + w + 'px;height:' + h + 'px;display:block;pointer-events:none;" draggable="false" />';
-          }
-        }
-        showStuckCursor();
+        showParked();
       };
     }
 
+    const onScaleChange = () => {
+      if (pointerEl && pointerEl.style.display === 'block') renderCursorImage(pointerEl);
+    };
+
     if (typeof window !== 'undefined' && window.addEventListener) {
-      window.addEventListener('mousemove', onMove, true);
-      window.addEventListener('pointermove', onMove, true);
-      window.addEventListener('mouseenter', onMove, true);
-      window.addEventListener('blur', onLeave, true);
-      listeners.push(['mousemove', onMove]);
-      listeners.push(['pointermove', onMove]);
-      listeners.push(['mouseenter', onMove]);
-      listeners.push(['blur', onLeave]);
-    }
-    if (typeof document !== 'undefined' && document.addEventListener) {
-      document.addEventListener('mouseleave', onLeave, true);
-      document.addEventListener('mouseout', onLeave, true);
-      docListeners.push(['mouseleave', onLeave]);
-      docListeners.push(['mouseout', onLeave]);
+      for (const name of ['mousemove', 'pointermove', 'pointerdown', 'mousedown']) {
+        window.addEventListener(name, onMove, true);
+        listeners.push([name, onMove]);
+      }
+      window.addEventListener('__prism_tab_scale_change__', onScaleChange, true);
+      listeners.push(['__prism_tab_scale_change__', onScaleChange]);
     }
   }
 
@@ -1268,19 +1193,12 @@ function patchDocument(rules, spoofOptions = {}) {
     if (typeof onCursorCastChange === 'function') {
       onCursorCastChange(e);
     }
-    updateSelectionHiding(active);
   };
 
   if (typeof window !== 'undefined' && window.addEventListener) {
     window.addEventListener('__prism_tab_cast_change__', onTabCastChange, true);
     listeners.push(['__prism_tab_cast_change__', onTabCastChange]);
   }
-  if (typeof document !== 'undefined' && document.addEventListener) {
-    const onDomLoaded = () => updateSelectionHiding();
-    document.addEventListener('DOMContentLoaded', onDomLoaded, true);
-    docListeners.push(['DOMContentLoaded', onDomLoaded]);
-  }
-  updateSelectionHiding();
 
   // Keep Chromium's actual selection so native copy, drag selection and editing
   // still work. Only the page-facing selection read APIs report an empty range.
@@ -1323,9 +1241,6 @@ function patchDocument(rules, spoofOptions = {}) {
 
     const stopBoundary = event => {
       if (event.isTrusted) {
-        if (optScreenshareCursor && (event.type === 'mouseleave' || event.type === 'mouseout')) {
-          try { if (typeof showStuckCursor === 'function') showStuckCursor(); } catch {}
-        }
         event.stopImmediatePropagation();
       }
     };
