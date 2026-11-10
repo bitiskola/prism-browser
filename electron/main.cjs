@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, WebContentsView, session, ipcMain, dialog, Menu, shell, nativeImage, clipboard, desktopCapturer, screen } = require('electron');
+const { app, BrowserWindow, WebContentsView, webContents, session, ipcMain, dialog, Menu, shell, nativeImage, clipboard, desktopCapturer, screen } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -138,13 +138,28 @@ function sharedCursorEnabled(tab) {
 }
 
 function sendSharedCursorStuck(tab, stuck, mouse = null) {
-  if (!sharedCursorEnabled(tab) || tab.view.webContents.isDestroyed()) return;
+  if (!sharedCursorEnabled(tab) || tab.view.webContents.isDestroyed()) return Promise.resolve(null);
   const cssPerDip = tabCssPerDip(tab);
   // before-mouse-event positions are view DIPs; the page works in CSS px.
   const coord = value => (typeof value === 'number' && Number.isFinite(value) ? Math.round(value * cssPerDip) : 'null');
-  tab.view.webContents.executeJavaScript(
-    'try { window.__prism_set_cursor_stuck?.(' + stuck + ', ' + coord(mouse?.x) + ', ' + coord(mouse?.y) + ', ' + JSON.stringify(currentSystemCursor()) + ', ' + cssPerDip + '); } catch {} void 0;'
-  ).catch(() => {});
+  return tab.view.webContents.executeJavaScript(
+    '(() => { try { return window.__prism_set_cursor_stuck?.(' + stuck + ', ' + coord(mouse?.x) + ', ' + coord(mouse?.y) + ', ' + JSON.stringify(currentSystemCursor()) + ', ' + cssPerDip + ') || null; } catch { return null; } })()'
+  ).catch(() => null);
+}
+
+// While the pointer is outside the shared tab, the site is told it sits at the
+// parked cursor: a trusted mouse move there keeps :hover and the reported
+// pointer position on the fake cursor. It only reaches the renderer, so the
+// OS pointer and the captured Chromium pointer are unaffected.
+function moveSharedPageMouse(tab, cssPoint) {
+  const wc = tab.view.webContents;
+  if (!cssPoint || wc.isDestroyed() || tab.id !== sharedTabId || !tab.pointerOutside) return;
+  const cssPerDip = tabCssPerDip(tab);
+  const x = Math.round(cssPoint.x / cssPerDip);
+  const y = Math.round(cssPoint.y / cssPerDip);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  tab.injectedMove = { x, y };
+  try { wc.sendInputEvent({ type: 'mouseMove', x, y }); } catch {}
 }
 
 // Tells the shared page which pointer images and scale to use, and whether to
@@ -172,15 +187,24 @@ function trySharedOverlayReset(tab) {
   })) tab.pendingOverlayReset = false;
 }
 
-function onSharedTabMouse(tab, mouse) {
+function onSharedTabMouse(event, tab, mouse) {
   if (!mouse || tab.id !== sharedTabId) return;
+  // Our own move to the parked cursor is not the user re-entering.
+  if (tab.injectedMove && mouse.type === 'mouseMove' && mouse.x === tab.injectedMove.x && mouse.y === tab.injectedMove.y) {
+    tab.injectedMove = null;
+    return;
+  }
+  const fakeCursor = sharedCursorEnabled(tab);
   if (mouse.type === 'mouseLeave') {
+    // With the fake cursor active the site must never see the pointer leave:
+    // the leave is not forwarded, so hover state and position stay put.
+    if (fakeCursor) event?.preventDefault?.();
     if (tab.pointerOutside) return;
     tab.pointerOutside = true;
     tab.pendingOverlayReset = true;
     // Let Chromium finish dispatching the exit before touching the view.
     setImmediate(() => trySharedOverlayReset(tab));
-    sendSharedCursorStuck(tab, true, mouse);
+    void sendSharedCursorStuck(tab, true, mouse).then(point => { if (fakeCursor) moveSharedPageMouse(tab, point); });
     return;
   }
   if (mouse.type === 'mouseUp' && tab.pendingOverlayReset) setImmediate(() => trySharedOverlayReset(tab));
@@ -197,7 +221,9 @@ function resetSharedPointerState(tab) {
   if (!tab) return;
   tab.pointerOutside = false;
   tab.pendingOverlayReset = false;
+  tab.injectedMove = null;
 }
+
 
 // Runs a small script in the page/frame that requested the current tab share,
 // where the screencast crop transformer lives.
@@ -512,7 +538,7 @@ async function createTab(url = 'about:blank', activate = true) {
   const update = () => { scheduleState(); scheduleSave(); };
   // Tracks held buttons so the capture-cursor reset never cancels a drag.
   wc.on('before-mouse-event', (_event, mouse) => {
-    onSharedTabMouse(tab, mouse);
+    onSharedTabMouse(_event, tab, mouse);
     if (mouse?.type === 'mouseDown') tab.mouseButtonDown = true;
     else if (mouse?.type === 'mouseUp') tab.mouseButtonDown = false;
     else if (mouse?.type === 'mouseMove' || mouse?.type === 'mouseLeave') {
@@ -810,8 +836,11 @@ async function configureSession() {
 
       const requestingOrigin = request.securityOrigin || '';
       const requestingFrame = request.frame;
+      // WebFrameMain has no webContents property; resolve the owning tab.
+      let requestingContents = null;
+      try { requestingContents = requestingFrame ? webContents.fromFrame(requestingFrame) : null; } catch {}
       const requestingTab = [...tabs.values()].find(t =>
-        requestingFrame && t.view && !t.view.webContents.isDestroyed() && t.view.webContents.id === requestingFrame.webContents?.id
+        requestingContents && t.view && !t.view.webContents.isDestroyed() && t.view.webContents.id === requestingContents.id
       );
       const isSpoofActive = requestingTab ? Boolean(requestingTab.spoofOnLoad) : checkTabSpoof(requestingOrigin);
       const requestId = randomUUID();
@@ -896,14 +925,23 @@ async function configureSession() {
           // The page script carries "this tab is shared" for documents loaded
           // during the share; refresh it now and again when the share ends.
           if (chosen?.spoofOnLoad) void focus.refresh(chosen.id).catch(() => {});
-          const listeners = [];
-          const listen = (wc, name, handler) => { wc.on(name, handler); listeners.push([wc, name, handler]); };
+          const disposers = [];
+          const listen = (wc, name, handler) => {
+            wc.on(name, handler);
+            disposers.push(() => { if (!wc.isDestroyed()) wc.removeListener(name, handler); });
+          };
           const cleanup = () => {
-            for (const [wc, name, handler] of listeners.splice(0)) { if (!wc.isDestroyed()) wc.removeListener(name, handler); }
+            for (const dispose of disposers.splice(0)) dispose();
             if (sharedTabId === selection.id) {
               const endedSharedId = sharedTabId;
               sharedTabId = null;
-              resetSharedPointerState(tabs.get(endedSharedId));
+              const endedShared = tabs.get(endedSharedId);
+              // The page was kept believing the mouse sat on the parked
+              // cursor; with the feature off again it gets the real leave.
+              if (endedShared?.pointerOutside && !endedShared.view.webContents.isDestroyed()) {
+                try { endedShared.view.webContents.sendInputEvent({ type: 'mouseLeave', x: -1, y: -1 }); } catch {}
+              }
+              resetSharedPointerState(endedShared);
               setCastState(false);
               const resetScript = `try { window.__prism_tab_scale = 1; window.__prism_tab_cast_active = false; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: 1 } })); window.dispatchEvent(new CustomEvent('__prism_tab_cast_change__', { detail: { active: false } })); } catch {} void 0;`;
               for (const tab of tabs.values()) {

@@ -997,17 +997,45 @@ function patchDocument(rules, spoofOptions = {}) {
               }
             }
           }
+          // Tell the browser when this share is over: when every video track
+          // it handed out (and any clone of one) has ended or been stopped.
+          // stop() does not fire 'ended', and sites usually stop sharing that
+          // way, which used to leave the shared tab's fake cursor active.
           const allTracks = (typeof stream.getVideoTracks === 'function') ? stream.getVideoTracks() : [];
-          for (const track of allTracks) {
+          const liveTracks = new Set();
+          let endSignalled = false;
+          const finish = track => {
+            if (!liveTracks.delete(track)) return;
+            activeCastTracksCount = Math.max(0, activeCastTracksCount - 1);
+            if (typeof onCastChange === 'function') onCastChange();
+            if (!liveTracks.size && !endSignalled) {
+              endSignalled = true;
+              try { console.info('__prism_screenshare_ended__'); } catch {}
+            }
+          };
+          const watchTrack = track => {
+            if (!track || liveTracks.has(track) || track.readyState === 'ended') return;
+            liveTracks.add(track);
             activeCastTracksCount++;
             if (typeof track.addEventListener === 'function') {
-              track.addEventListener('ended', () => {
-                activeCastTracksCount = Math.max(0, activeCastTracksCount - 1);
-                if (typeof onCastChange === 'function') onCastChange();
-                try { console.info('__prism_screenshare_ended__'); } catch {}
-              }, { once: true });
+              track.addEventListener('ended', () => finish(track), { once: true });
             }
-          }
+            if (typeof track.stop === 'function') {
+              const previousStop = track.stop;
+              track.stop = function stop(...args) {
+                try { return Reflect.apply(previousStop, this, args); } finally { finish(track); }
+              };
+            }
+            if (typeof track.clone === 'function') {
+              const previousClone = track.clone;
+              track.clone = function clone(...args) {
+                const cloned = Reflect.apply(previousClone, this, args);
+                watchTrack(cloned);
+                return cloned;
+              };
+            }
+          };
+          for (const track of allTracks) watchTrack(track);
         } catch {}
         return stream;
       };
@@ -1183,6 +1211,7 @@ function patchDocument(rules, spoofOptions = {}) {
         parkY = H - MARGIN_CM;
       }
       placeAt(parkX, parkY, 'default');
+      return { x: Math.round(parkX), y: Math.round(parkY) };
     };
 
     // Approximates the pointer the page would show: hand over links and
@@ -1286,7 +1315,9 @@ function patchDocument(rules, spoofOptions = {}) {
           lastY = exitY;
         }
         parked = true;
-        showParked();
+        // The main process moves the page's mouse here, so the site sees the
+        // pointer (and :hover) at the parked cursor instead of leaving.
+        return showParked() || null;
       };
       // Main process: cursor images, DIP->CSS factor and whether to draw the
       // pointer in the page (fullscreen lock active outside real fullscreen).

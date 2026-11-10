@@ -350,6 +350,39 @@ test('screenshare track ended listener logs __prism_screenshare_ended__ for clea
   assert.ok(consoleLogs.includes('__prism_screenshare_ended__'), 'emitted screenshare ended log');
 });
 
+test('screenshare end is reported once every handed-out track (and clone) is stopped, since stop() fires no ended event', async () => {
+  const vm = require('node:vm');
+  const { buildFocusScript } = require('../electron/focus.cjs');
+  const document = Object.create({ hasFocus() { return false; } });
+  document.location = { href: 'https://call.example' };
+  const consoleLogs = [];
+  const fakeConsole = { info: (...args) => consoleLogs.push(args.join(' ')) };
+  const stopped = [];
+  class MockTrack {
+    constructor(name) { this.name = name; this.readyState = 'live'; }
+    getSettings() { return { displaySurface: 'browser' }; }
+    getCapabilities() { return {}; }
+    addEventListener() {}
+    stop() { this.readyState = 'ended'; stopped.push(this.name); }
+    clone() { return new MockTrack(this.name + '-clone'); }
+  }
+  const track = new MockTrack('video');
+  const window = { addEventListener() {}, removeEventListener() {}, console: fakeConsole, MediaStreamTrack: MockTrack };
+  const navigator = { mediaDevices: { getDisplayMedia: async () => ({ getVideoTracks: () => [track], getTracks: () => [track] }) } };
+  const context = vm.createContext({ document, window, navigator, console: fakeConsole, URL, DOMException });
+  vm.runInContext(buildFocusScript([{ host: 'call.example', focus: true }]), context);
+
+  await context.navigator.mediaDevices.getDisplayMedia();
+  const copy = track.clone();
+  track.stop();
+  assert.deepEqual(stopped, ['video'], 'native stop still runs');
+  assert.equal(consoleLogs.filter(l => l === '__prism_screenshare_ended__').length, 0, 'a live clone keeps the share going');
+  copy.stop();
+  assert.equal(consoleLogs.filter(l => l === '__prism_screenshare_ended__').length, 1, 'reported when the last track stops');
+  track.stop();
+  assert.equal(consoleLogs.filter(l => l === '__prism_screenshare_ended__').length, 1, 'reported only once');
+});
+
 test('screenshare WebCodecs crop/scale pipeline transforms scaled down tab video without blank margins', async () => {
   const vm = require('node:vm');
   const { buildFocusScript } = require('../electron/focus.cjs');
