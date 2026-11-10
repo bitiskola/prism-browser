@@ -175,7 +175,9 @@ function pushSharedCursorConfig() {
   if (data.spoof?.fullscreen !== false && focus?.computeScale) scale = focus.computeScale(tab.id, getFullscreenResolution()) || 1;
   const config = { cursor: currentSystemCursor(), cssPerDip: tabCssPerDip(tab), live: scale < 0.999 };
   tab.view.webContents.executeJavaScript(
-    `try { window.__prism_tab_scale = ${scale}; window.__prism_cast_cursor_update?.(${JSON.stringify(config)}); } catch {} void 0;`
+    // Also re-marks the page as shared: a document loaded during the share
+    // (reload, navigation) starts without that flag.
+    `try { window.__prism_tab_scale = ${scale}; if (window.__prism_tab_cast_active !== true) { window.__prism_tab_cast_active = true; window.dispatchEvent(new CustomEvent('__prism_tab_cast_change__', { detail: { active: true } })); } window.__prism_cast_cursor_update?.(${JSON.stringify(config)}); } catch {} void 0;`
   ).catch(() => {});
 }
 
@@ -537,8 +539,12 @@ async function createTab(url = 'about:blank', activate = true) {
   view.setVisible(false);
   const update = () => { scheduleState(); scheduleSave(); };
   // Tracks held buttons so the capture-cursor reset never cancels a drag.
-  wc.on('before-mouse-event', (_event, mouse) => {
-    onSharedTabMouse(_event, tab, mouse);
+  wc.on('before-mouse-event', (event, mouse) => {
+    // Spoof mode: the site never learns the pointer left the page. The leave
+    // is not forwarded, so :hover and the last reported position stay put
+    // (on the parked fake cursor while the tab is shared).
+    if (mouse?.type === 'mouseLeave' && tab.spoofOnLoad && data.spoof?.focusVisibility !== false) event.preventDefault();
+    onSharedTabMouse(event, tab, mouse);
     if (mouse?.type === 'mouseDown') tab.mouseButtonDown = true;
     else if (mouse?.type === 'mouseUp') tab.mouseButtonDown = false;
     else if (mouse?.type === 'mouseMove' || mouse?.type === 'mouseLeave') {
@@ -922,9 +928,6 @@ async function configureSession() {
           };
           setCastState(true);
           pushSharedCursorConfig();
-          // The page script carries "this tab is shared" for documents loaded
-          // during the share; refresh it now and again when the share ends.
-          if (chosen?.spoofOnLoad) void focus.refresh(chosen.id).catch(() => {});
           const disposers = [];
           const listen = (wc, name, handler) => {
             wc.on(name, handler);
@@ -935,13 +938,7 @@ async function configureSession() {
             if (sharedTabId === selection.id) {
               const endedSharedId = sharedTabId;
               sharedTabId = null;
-              const endedShared = tabs.get(endedSharedId);
-              // The page was kept believing the mouse sat on the parked
-              // cursor; with the feature off again it gets the real leave.
-              if (endedShared?.pointerOutside && !endedShared.view.webContents.isDestroyed()) {
-                try { endedShared.view.webContents.sendInputEvent({ type: 'mouseLeave', x: -1, y: -1 }); } catch {}
-              }
-              resetSharedPointerState(endedShared);
+              resetSharedPointerState(tabs.get(endedSharedId));
               setCastState(false);
               const resetScript = `try { window.__prism_tab_scale = 1; window.__prism_tab_cast_active = false; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: 1 } })); window.dispatchEvent(new CustomEvent('__prism_tab_cast_change__', { detail: { active: false } })); } catch {} void 0;`;
               for (const tab of tabs.values()) {
@@ -958,7 +955,6 @@ async function configureSession() {
               if (endedTab?.spoofOnLoad && data.spoof?.fullscreen !== false && focus && typeof focus.updateMetrics === 'function') {
                 focus.updateMetrics(endedSharedId);
               }
-              if (endedTab?.spoofOnLoad) void focus.refresh(endedSharedId).catch(() => {});
             }
           };
           // A tab capture follows the shared tab across its own navigations, so

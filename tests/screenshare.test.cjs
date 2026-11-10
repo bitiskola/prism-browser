@@ -703,3 +703,26 @@ test('shared tab resize always releases the hold, even when the tab is gone', as
   await runSharedResize(tab, { hold: async () => log.push('hold'), release: () => log.push('release'), isAlive: () => false, updateMetrics: async () => log.push('metrics') });
   assert.deepEqual(log, ['hold', 'release']);
 });
+
+test('reinstalling the page script with new settings keeps the browser-set share state; disabling removes it', () => {
+  const vm = require('node:vm');
+  const { buildFocusScript } = require('../electron/focus.cjs');
+  const document = Object.create({ hasFocus() { return true; } });
+  document.location = { href: 'https://exam.example/test' };
+  const window = { addEventListener() {}, removeEventListener() {} };
+  const context = vm.createContext({ document, window, navigator: {}, URL, DOMException });
+  const rules = [{ host: 'exam.example', focus: true }];
+
+  vm.runInContext(buildFocusScript(rules, { keyboard: true }), context);
+  // Set by the main process while a getDisplayMedia call waits for its stream.
+  window.__prism_report_display_surface = 'monitor';
+  window.__prism_tab_cast_active = true;
+
+  vm.runInContext(buildFocusScript(rules, { keyboard: false }), context);
+  assert.equal(window.__prism_report_display_surface, 'monitor', 'report-as surface survives a reinstall');
+  assert.equal(window.__prism_tab_cast_active, true);
+
+  vm.runInContext(buildFocusScript([], {}), context);
+  assert.equal('__prism_report_display_surface' in window, false, 'cleared when spoof mode is turned off');
+  assert.equal('__prism_tab_cast_active' in window, false);
+});

@@ -252,7 +252,11 @@ function patchDocument(rules, spoofOptions = {}) {
   // Reinstalling after website scripts have run would let their listeners run first.
   const currentSignature = JSON.stringify(spoofOptions);
   if (enabled && previous?.version === 2 && previous?.signature === currentSignature) return true;
-  if (previous && typeof previous.restore === 'function') previous.restore();
+  // A reinstall (changed settings) keeps the browser-set share state: a
+  // getDisplayMedia call may still be waiting for its stream, and dropping
+  // the "report as" surface made a tab share reported as a full screen come
+  // back as a tab.
+  if (previous && typeof previous.restore === 'function') previous.restore({ keepShareState: enabled });
   if (!enabled) return false;
 
   const optFocusVisibility = spoofOptions.focusVisibility !== false;
@@ -284,7 +288,7 @@ function patchDocument(rules, spoofOptions = {}) {
       descriptors.push({ owner, name, original, replacement: Object.getOwnPropertyDescriptor(owner, name) });
     } catch { /* Non-configurable properties on unusual pages cannot be replaced. */ }
   };
-  const restore = () => {
+  const restore = ({ keepShareState = false } = {}) => {
     for (const [name, listener] of listeners) window.removeEventListener(name, listener, true);
     for (const [name, listener] of docListeners) {
       try { document.removeEventListener(name, listener, true); } catch {}
@@ -315,18 +319,16 @@ function patchDocument(rules, spoofOptions = {}) {
       cursorHost = null;
       cursorEl = null;
     }
-    try { delete window.__prism_report_display_surface; } catch {}
+    if (!keepShareState) {
+      try { delete window.__prism_report_display_surface; } catch {}
+      try { delete window.__prism_tab_cast_active; } catch {}
+    }
     try { delete window.__prism_set_cursor_stuck; } catch {}
     try { delete window.__prism_cast_cursor_update; } catch {}
-    try { delete window.__prism_tab_cast_active; } catch {} 
     try { delete document[key]; } catch { /* Best effort if a page freezes the document. */ }
   };
   try { Object.defineProperty(document, key, { value: { restore, version: 2, signature: currentSignature }, configurable: true }); }
   catch { return false; }
-
-  if (spoofOptions.isSharedTab) {
-    try { window.__prism_tab_cast_active = true; } catch {}
-  }
 
   if (optFocusVisibility) {
     for (const [name, value] of [['hasFocus', true], ['hidden', false], ['visibilityState', 'visible'], ['webkitHidden', false], ['webkitVisibilityState', 'visible']]) {
@@ -1883,8 +1885,9 @@ class FocusController {
         const hasSpoof = Object.keys(rawSpoofOptions).length > 0;
         const targetRes = typeof this.getTargetResolution === 'function' ? this.getTargetResolution() : { width: 1920, height: 1080 };
         const sysCursor = typeof this.getSystemCursor === 'function' ? this.getSystemCursor() : null;
-        const isTabShared = (typeof this.getSharedTabId === 'function') && this.getSharedTabId() === tabId;
-        const spoofOptions = hasSpoof ? { ...rawSpoofOptions, targetResolution: targetRes, systemCursor: sysCursor, isSharedTab: isTabShared } : rawSpoofOptions;
+        // Share state is not part of the script: changing it would reinstall
+        // the script mid-share. The main process pushes it after each apply.
+        const spoofOptions = hasSpoof ? { ...rawSpoofOptions, targetResolution: targetRes, systemCursor: sysCursor } : rawSpoofOptions;
         const normalized = focusRules(rules);
         const source = buildFocusScript(rules, spoofOptions);
         const signature = JSON.stringify({ rules: normalized, spoof: spoofOptions });
