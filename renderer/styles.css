@@ -1959,6 +1959,16 @@ body.compact-module-buttons .privacy-tools .toolbar-mini {
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.4);
   transform: scale(1.1);
 }
+.theme-color-swatch[data-color="#b49bf8"], .theme-color-swatch[data-color="#B49BF8"] { background-color: #b49bf8 !important; }
+.theme-color-swatch[data-color="#60a5fa"], .theme-color-swatch[data-color="#60A5FA"] { background-color: #60a5fa !important; }
+.theme-color-swatch[data-color="#38bdf8"], .theme-color-swatch[data-color="#38BDF8"] { background-color: #38bdf8 !important; }
+.theme-color-swatch[data-color="#34d399"], .theme-color-swatch[data-color="#34D399"] { background-color: #34d399 !important; }
+.theme-color-swatch[data-color="#a3e635"], .theme-color-swatch[data-color="#A3E635"] { background-color: #a3e635 !important; }
+.theme-color-swatch[data-color="#fbbf24"], .theme-color-swatch[data-color="#FBBF24"] { background-color: #fbbf24 !important; }
+.theme-color-swatch[data-color="#f97316"], .theme-color-swatch[data-color="#F97316"] { background-color: #f97316 !important; }
+.theme-color-swatch[data-color="#f43f5e"], .theme-color-swatch[data-color="#F43F5E"] { background-color: #f43f5e !important; }
+.theme-color-swatch[data-color="#ec4899"], .theme-color-swatch[data-color="#EC4899"] { background-color: #ec4899 !important; }
+.theme-color-swatch[data-color="#818cf8"], .theme-color-swatch[data-color="#818CF8"] { background-color: #818cf8 !important; }
 .theme-custom-color {
   position: relative;
   width: 28px;
@@ -1970,6 +1980,21 @@ body.compact-module-buttons .privacy-tools .toolbar-mini {
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.theme-custom-color:hover {
+  transform: scale(1.15);
+}
+.theme-custom-color.active {
+  border-color: #ffffff;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.4);
+  transform: scale(1.1);
+}
+.theme-custom-color svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  pointer-events: none;
 }
 .theme-custom-color input[type="color"] {
   position: absolute;
@@ -2502,6 +2527,11 @@ body.light-mode .theme-mode-btn {
 }
 body.light-mode .theme-mode-btn:hover:not(.active) {
   background: rgba(0, 0, 0, 0.05);
+}
+body.light-mode .theme-color-swatch.active,
+body.light-mode .theme-custom-color.active {
+  border-color: #1e293b;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
 }
 body.light-mode .switch,
 body.light-mode .switch-input {

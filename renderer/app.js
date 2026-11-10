@@ -435,18 +435,24 @@ function renderSettings() {
   $('#side-panel').innerHTML=panelHeader('Browser settings','sliders')+`<p class="panel-subtitle">Make the web feel more like yours.</p><nav class="settings-nav" aria-label="Settings sections"><button data-settings-section="general">General</button><button data-settings-section="theme">Theme</button><button data-settings-section="shortcuts">Shortcuts</button><button data-settings-section="search">Search</button><button data-settings-section="typing">Typing</button><button data-settings-section="spoof">Spoof mode</button><button data-settings-section="proxy">Proxy</button><button data-settings-section="adblock">Ad blocker</button><button data-settings-section="sites">Sites</button></nav><div class="panel-scroll settings-scroll">
     ${preview?'<div class="preview-notice">Interactive desktop preview. Proxy routing, ad blocking, browsing, and spoof mode run in the Electron app.</div>':''}
     <section id="settings-general" class="settings-section" tabindex="-1"><h3 class="section-label">GENERAL &amp; STARTUP</h3><form id="general-settings-form" class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('compass')}</span><div><h3>Browser startup</h3><p>Choose what opens when you start Prism.</p></div></div><div class="general-toggles"><label class="setting-line form-switch"><span>Reopen tabs on launch<small>Restore all open tabs from your previous browsing session when starting Prism</small></span><input id="general-restore-tabs" type="checkbox" class="switch-input" ${(general.restoreTabs!==false)?'checked':''}></label></div><button class="primary-button full-width" type="submit">Save startup preferences</button></form></section>
-    <section id="settings-theme" class="settings-section" tabindex="-1"><h3 class="section-label">THEME &amp; APPEARANCE</h3><form id="theme-settings-form" class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('edit')}</span><div><h3>Accent color &amp; appearance</h3><p>Customize Prism’s accent color, theme mode, and interface.</p></div></div><label class="field-label">Color scheme</label><div class="theme-mode-options"><button type="button" class="theme-mode-btn ${theme.mode!=='light'?'active':''}" data-mode="dark">${icon('moon')}<span>Dark (Default)</span></button><button type="button" class="theme-mode-btn ${theme.mode==='light'?'active':''}" data-mode="light">${icon('sun')}<span>Light</span></button></div><label class="field-label">Accent color</label><div class="theme-color-palette">${[
-      ['#b49bf8','Purple (Default)'],
-      ['#60a5fa','Sky Blue'],
-      ['#38bdf8','Cyan'],
-      ['#34d399','Emerald'],
-      ['#a3e635','Lime'],
-      ['#fbbf24','Amber'],
-      ['#f97316','Orange'],
-      ['#f43f5e','Rose'],
-      ['#ec4899','Pink'],
-      ['#818cf8','Indigo']
-    ].map(([hex,label])=>`<button type="button" class="theme-color-swatch ${(theme.accentColor||'#b49bf8').toLowerCase()===hex.toLowerCase()?'active':''}" data-color="${hex}" title="${label}" style="background-color: ${hex}"></button>`).join('')}<div class="theme-custom-color" title="Custom color"><input type="color" id="theme-custom-picker" value="${theme.accentColor||'#b49bf8'}" aria-label="Custom color picker"></div></div><label class="field-label" for="theme-hex-input">Custom Hex Code</label><div class="theme-hex-row"><input class="field-input" id="theme-hex-input" type="text" placeholder="#b49bf8" value="${escape(theme.accentColor||'#b49bf8')}" spellcheck="false" maxlength="7"></div><div class="theme-toggles"><label class="setting-line form-switch"><span>Hide brand logo<small>Hides the "prism." wordmark in the top-left titlebar</small></span><input id="theme-hide-logo" type="checkbox" class="switch-input" ${theme.hideLogo?'checked':''}></label><label class="setting-line form-switch"><span>Hide module buttons text<small>Only show icons and dropdowns for Spoof mode, Proxy, and Ad blocker</small></span><input id="theme-hide-module-text" type="checkbox" class="switch-input" ${theme.hideModuleText?'checked':''}></label></div><button class="primary-button full-width" type="submit">Save theme preferences</button></form></section>
+    <section id="settings-theme" class="settings-section" tabindex="-1"><h3 class="section-label">THEME &amp; APPEARANCE</h3><form id="theme-settings-form" class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('edit')}</span><div><h3>Accent color &amp; appearance</h3><p>Customize Prism’s accent color, theme mode, and interface.</p></div></div><label class="field-label">Color scheme</label><div class="theme-mode-options"><button type="button" class="theme-mode-btn ${theme.mode!=='light'?'active':''}" data-mode="dark">${icon('moon')}<span>Dark (Default)</span></button><button type="button" class="theme-mode-btn ${theme.mode==='light'?'active':''}" data-mode="light">${icon('sun')}<span>Light</span></button></div><label class="field-label">Accent color</label><div class="theme-color-palette">${(() => {
+      const presetColors = [
+        ['#b49bf8','Purple (Default)'],
+        ['#60a5fa','Sky Blue'],
+        ['#38bdf8','Cyan'],
+        ['#34d399','Emerald'],
+        ['#a3e635','Lime'],
+        ['#fbbf24','Amber'],
+        ['#f97316','Orange'],
+        ['#f43f5e','Rose'],
+        ['#ec4899','Pink'],
+        ['#818cf8','Indigo']
+      ];
+      const curColor = (theme.accentColor || '#b49bf8').toLowerCase();
+      const isCustom = !presetColors.some(([c]) => c.toLowerCase() === curColor);
+      return presetColors.map(([hex,label])=>`<button type="button" class="theme-color-swatch ${curColor===hex.toLowerCase()?'active':''}" data-color="${hex}" title="${label}" style="background-color: ${hex}"></button>`).join('') +
+        `<div class="theme-custom-color ${isCustom ? 'active' : ''}" id="theme-custom-color-btn" title="Custom color" style="${isCustom ? `background-color:${escape(theme.accentColor)};border-style:solid;` : ''}">${icon('plus')}<input type="color" id="theme-custom-picker" value="${escape(theme.accentColor||'#b49bf8')}" aria-label="Custom color picker"></div>`;
+    })()}</div><label class="field-label" for="theme-hex-input">Custom Hex Code</label><div class="theme-hex-row"><input class="field-input" id="theme-hex-input" type="text" placeholder="#b49bf8" value="${escape(theme.accentColor||'#b49bf8')}" spellcheck="false" maxlength="7"></div><div class="theme-toggles"><label class="setting-line form-switch"><span>Hide brand logo<small>Hides the "prism." wordmark in the top-left titlebar</small></span><input id="theme-hide-logo" type="checkbox" class="switch-input" ${theme.hideLogo?'checked':''}></label><label class="setting-line form-switch"><span>Hide module buttons text<small>Only show icons and dropdowns for Spoof mode, Proxy, and Ad blocker</small></span><input id="theme-hide-module-text" type="checkbox" class="switch-input" ${theme.hideModuleText?'checked':''}></label></div><button class="primary-button full-width" type="submit">Save theme preferences</button></form></section>
     <section id="settings-shortcuts" class="settings-section" tabindex="-1"><h3 class="section-label">KEYBOARD SHORTCUTS</h3><form id="shortcuts-settings-form" class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('terminal')}</span><div><h3>Shortcut customization</h3><p>Remap built-in shortcuts. Press key combinations or edit text directly.</p></div></div><label class="field-label" for="shortcut-typing">Clipboard typing</label><div class="shortcut-input-row"><input class="field-input shortcut-input" id="shortcut-typing" type="text" value="${escape(shortcuts.typing||'Ctrl+9')}" placeholder="Ctrl+9" spellcheck="false" autocomplete="off"><button type="button" class="secondary-button shortcut-reset-btn" data-reset-target="shortcut-typing" data-default="Ctrl+9" title="Reset to default">Reset</button></div><p class="field-help">Types clipboard text into focused input fields character by character. Default: <code>Ctrl+9</code> (or <code>Command+9</code> on macOS).</p><label class="field-label" for="shortcut-fullscreen">Toggle fullscreen</label><div class="shortcut-input-row"><input class="field-input shortcut-input" id="shortcut-fullscreen" type="text" value="${escape(shortcuts.fullscreen||'Ctrl+F')}" placeholder="Ctrl+F" spellcheck="false" autocomplete="off"><button type="button" class="secondary-button shortcut-reset-btn" data-reset-target="shortcut-fullscreen" data-default="Ctrl+F" title="Reset to default">Reset</button></div><p class="field-help">Toggles the browser window in and out of fullscreen mode. Default: <code>Ctrl+F</code> (or <code>Command+F</code> on macOS). <code>F11</code> also works.</p><button class="primary-button full-width" type="submit">Save shortcuts</button></form></section>
     <section id="settings-search" class="settings-section" tabindex="-1"><h3 class="section-label">SEARCH & NAVIGATION</h3><form id="search-settings-form" class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('search')}</span><div><h3>Your default search engine</h3><p>Used by the address bar and new tab search.</p></div></div><label class="field-label" for="search-engine">Search engine</label><select class="field-input" id="search-engine">${Object.entries(searchEngines).map(([value,[label]])=>`<option value="${value}" ${search.engine===value?'selected':''}>${label}</option>`).join('')}</select><div id="custom-search-fields" ${search.engine==='custom'?'':'hidden'}><label class="field-label" for="search-template">Custom search URL</label><input class="field-input" id="search-template" type="text" placeholder="https://example.com/search?q={query}" value="${escape(search.customTemplate)}" autocomplete="off" spellcheck="false"><p class="field-help">Use an HTTPS URL with <code>{query}</code> where the search words should go.</p></div><button type="submit" class="primary-button full-width">Save search engine</button></form></section>
     <section id="settings-typing" class="settings-section" tabindex="-1"><h3 class="section-label">CLIPBOARD TYPING</h3><div class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('sliders')}</span><div><h3>Typing speed</h3><p>Type clipboard text with ${escape(shortcuts.typing||'Ctrl+9')} (press again or Escape to stop).</p></div></div><div class="typing-speed-label"><label class="field-label" for="typing-speed">Speed</label><output id="typing-speed-value" for="typing-speed">${typingSpeedLabel(typing.speed)}</output></div><input id="typing-speed" class="typing-speed-slider" type="range" min="0.25" max="3" step="0.25" value="${typing.speed}" aria-valuetext="${typingSpeedLabel(typing.speed)}" aria-describedby="typing-speed-help"><div class="typing-speed-scale"><span>Slower · 0.25×</span><span>Faster · 3×</span></div><p id="typing-speed-help" class="form-footnote">Random timing and natural pauses stay on at every speed. Changes save automatically. Press Escape or the shortcut again to stop typing.</p></div></section>
@@ -505,18 +511,32 @@ function renderSettings() {
   });
   $('#theme-settings-form')?.addEventListener('submit',saveThemeSettings);
   $$('.theme-color-swatch').forEach(swatch=>{
+    if(swatch.dataset.color) swatch.style.backgroundColor = swatch.dataset.color;
     swatch.addEventListener('click',()=>{
       const hex=swatch.dataset.color;if(!hex)return;
       const hexIn=$('#theme-hex-input'),picker=$('#theme-custom-picker');
       if(hexIn)hexIn.value=hex;if(picker)picker.value=hex;
       $$('.theme-color-swatch').forEach(s=>s.classList.toggle('active',s===swatch));
+      const customBtn=$('#theme-custom-color-btn');
+      if(customBtn){customBtn.classList.remove('active');customBtn.style.backgroundColor='';customBtn.style.borderStyle='';}
       const draft={...(settingsDrafts.theme||state.theme),accentColor:hex};
       settingsDrafts.theme=draft;applyTheme(draft);
     });
   });
   $('#theme-custom-picker')?.addEventListener('input',e=>{
     const hex=e.target.value;const hexIn=$('#theme-hex-input');if(hexIn)hexIn.value=hex;
-    $$('.theme-color-swatch').forEach(s=>s.classList.toggle('active',s.dataset.color?.toLowerCase()===hex.toLowerCase()));
+    let matched=false;
+    $$('.theme-color-swatch').forEach(s=>{
+      const match=s.dataset.color?.toLowerCase()===hex.toLowerCase();
+      s.classList.toggle('active',match);
+      if(match) matched=true;
+    });
+    const customBtn=$('#theme-custom-color-btn');
+    if(customBtn){
+      customBtn.classList.toggle('active',!matched);
+      customBtn.style.backgroundColor=!matched?hex:'';
+      customBtn.style.borderStyle=!matched?'solid':'';
+    }
     const draft={...(settingsDrafts.theme||state.theme),accentColor:hex};
     settingsDrafts.theme=draft;applyTheme(draft);
   });
@@ -524,7 +544,18 @@ function renderSettings() {
     let hex=e.target.value.trim();if(!hex.startsWith('#')&&hex.length===6)hex='#'+hex;
     if(/^#[0-9a-fA-F]{6}$/.test(hex)){
       const picker=$('#theme-custom-picker');if(picker)picker.value=hex;
-      $$('.theme-color-swatch').forEach(s=>s.classList.toggle('active',s.dataset.color?.toLowerCase()===hex.toLowerCase()));
+      let matched=false;
+      $$('.theme-color-swatch').forEach(s=>{
+        const match=s.dataset.color?.toLowerCase()===hex.toLowerCase();
+        s.classList.toggle('active',match);
+        if(match) matched=true;
+      });
+      const customBtn=$('#theme-custom-color-btn');
+      if(customBtn){
+        customBtn.classList.toggle('active',!matched);
+        customBtn.style.backgroundColor=!matched?hex:'';
+        customBtn.style.borderStyle=!matched?'solid':'';
+      }
       const draft={...(settingsDrafts.theme||state.theme),accentColor:hex};
       settingsDrafts.theme=draft;applyTheme(draft);
     }
