@@ -10,7 +10,7 @@ const { FaviconController, createImageDecoder } = require('./favicon.cjs');
 const { makeCookieExport, parseCookieExportText, cookieSetDetails, cookieDomainInScope, MAX_FILE_BYTES } = require('./cookies.cjs');
 const { NetworkMonitor } = require('./network.cjs');
 const { FocusController, getChromeUserAgent, SPOOF_PLATFORMS, SPOOF_BROWSERS, getSpoofProfile } = require('./focus.cjs');
-const { DEFAULT_PREFERENCES, SEARCH_ENGINES, normalizeTheme, normalizeSearch, normalizeProxy, publicProxyConfig, normalizeTyping, normalizeSpoof, SUPPORTED_SPOOF_BROWSERS } = require('./preferences.cjs');
+const { DEFAULT_PREFERENCES, SEARCH_ENGINES, normalizeGeneral, normalizeTheme, normalizeShortcuts, parseShortcut, matchesShortcut, normalizeSearch, normalizeProxy, publicProxyConfig, normalizeTyping, normalizeSpoof, SUPPORTED_SPOOF_BROWSERS } = require('./preferences.cjs');
 const { ProxyController } = require('./proxy.cjs');
 const { AdblockController, normalizeAdblockSettings } = require('./adblock.cjs');
 const { ClipboardTyping } = require('./clipboard-typing.cjs');
@@ -31,7 +31,9 @@ let pendingScreenshare = null, sharedTabId = null;
 let saveTimer, stateTimer, closing = false, flushed = false, proxyChangesInFlight = 0;
 let faviconDecoderView, faviconDecoderReady, faviconDecoderShutdown = false;
 let data = { rules: [], bookmarks: [], history: [], tabs: [], activeIndex: 0,
+  general: { ...DEFAULT_PREFERENCES.general },
   theme: { ...DEFAULT_PREFERENCES.theme },
+  shortcuts: { ...DEFAULT_PREFERENCES.shortcuts },
   search: { ...DEFAULT_PREFERENCES.search }, typing: { ...DEFAULT_PREFERENCES.typing },
   spoof: { ...DEFAULT_PREFERENCES.spoof },
   proxy: publicProxyConfig(DEFAULT_PREFERENCES.proxy),
@@ -43,6 +45,7 @@ const emit = (event, value) => { if (win && !win.isDestroyed() && !win.webConten
 const toast = message => emit('toast', { message });
 const clipboardTyping = new ClipboardTyping({
   readText: () => clipboard.readText(), notify: toast, getSpeed: () => data.typing.speed,
+  getShortcut: () => data.shortcuts?.typing || 'Ctrl+9',
   canType: wc => Boolean(win && !win.isDestroyed() && win.isFocused() && !wc.isDestroyed() && wc.isFocused()
     && (wc === win.webContents || (active()?.view.webContents === wc && viewport.visible)))
 });
@@ -319,7 +322,9 @@ function readState() {
     data.history = (saved.history || []).filter(x => isWebURL(x.url)).slice(0, 1000);
     data.tabs = (saved.tabs || []).filter(x => x === 'about:blank' || isWebURL(x)).slice(0, 30);
     data.activeIndex = Math.max(0, Number(saved.activeIndex) || 0);
+    try { data.general = normalizeGeneral(saved.general); } catch { /* Keep default general settings. */ }
     try { data.theme = normalizeTheme(saved.theme); } catch { /* Keep default theme settings. */ }
+    try { data.shortcuts = normalizeShortcuts(saved.shortcuts); } catch { /* Keep default shortcuts. */ }
     try { data.search = normalizeSearch(saved.search); } catch { /* Keep defaults for invalid legacy preferences. */ }
     try { data.typing = normalizeTyping(saved.typing); } catch { /* Keep normal speed for invalid saved preferences. */ }
     try { data.spoof = normalizeSpoof(saved.spoof); } catch { /* Keep default spoof settings. */ }
@@ -357,7 +362,9 @@ function snapshot() {
     rules: data.rules, downloads: [...downloads.values()].map(({ item, ...entry }) => entry), profilePath: profile,
     networkPaused: monitor.paused, networkCount: monitor.entries.size,
     isFullscreen: isFull,
+    general: data.general,
     theme: data.theme,
+    shortcuts: data.shortcuts,
     search: data.search, searchEngines: SEARCH_ENGINES, typing: data.typing,
     spoof: { ...data.spoof },
     proxy: { ...data.proxy, ...proxy?.snapshot(), applying: proxyChangesInFlight > 0, hasCredentials: Boolean(proxy?.getConfig().username || proxy?.getConfig().password), ...(connectionError ? { error: connectionError } : {}) },
@@ -593,7 +600,9 @@ async function createTab(url = 'about:blank', activate = true) {
   wc.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
     const key = input.key.toLowerCase(), mod = input.control || input.meta;
-    if (key === 'f11' || (mod && key === 'f')) {
+    const fullscreenShortcut = data.shortcuts?.fullscreen || 'Ctrl+F';
+    const isFullscreenTrigger = key === 'f11' || matchesShortcut(parseShortcut(fullscreenShortcut), input);
+    if (isFullscreenTrigger) {
       event.preventDefault();
       const willBeFull = !win.isFullScreen();
       if (!willBeFull) exitHtmlFullScreen();
@@ -1087,7 +1096,9 @@ async function action(name, payload = {}) {
   const tab = active(), wc = tab?.view.webContents;
   switch (name) {
     case 'get-state': return snapshot();
+    case 'general-save': data.general = normalizeGeneral(payload.general); saveState(); break;
     case 'theme-save': data.theme = normalizeTheme(payload.theme); saveState(); break;
+    case 'shortcuts-save': data.shortcuts = normalizeShortcuts(payload.shortcuts); saveState(); break;
     case 'search-save': data.search = normalizeSearch(payload.search); saveState(); break;
     case 'typing-save': data.typing = normalizeTyping(payload.typing); saveState(); break;
     case 'spoof-save': {
@@ -1298,7 +1309,9 @@ async function createWindow() {
   win.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
     const key = input.key.toLowerCase(), mod = input.control || input.meta;
-    if (key === 'f11' || (mod && key === 'f')) {
+    const fullscreenShortcut = data.shortcuts?.fullscreen || 'Ctrl+F';
+    const isFullscreenTrigger = key === 'f11' || matchesShortcut(parseShortcut(fullscreenShortcut), input);
+    if (isFullscreenTrigger) {
       event.preventDefault();
       const willBeFull = !win.isFullScreen();
       if (!willBeFull) exitHtmlFullScreen();
@@ -1315,8 +1328,9 @@ async function createWindow() {
   win.on('close', () => { saveState(); closing = true; clearTimeout(saveTimer); });
   win.on('closed', () => { if (pendingScreenshare) { pendingScreenshare.callback(null); pendingScreenshare = null; } sharedTabId = null; closeFaviconDecoder(); for (const tab of tabs.values()) { monitor.detach(tab.id); adblock?.detach(tab.view.webContents.id); void focus.detach(tab.id); if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close(); } tabs.clear(); win = null; });
   await win.loadFile(shellFile);
-  const restore = !connectionError && data.tabs.length ? [...data.tabs] : ['about:blank'];
-  const selected = data.activeIndex;
+  const shouldRestore = data.general?.restoreTabs !== false;
+  const restore = !connectionError && shouldRestore && data.tabs.length ? [...data.tabs] : ['about:blank'];
+  const selected = shouldRestore ? data.activeIndex : 0;
   for (const url of restore) await createTab(url, false);
   activeTabId = [...tabs.keys()][Math.min(selected, tabs.size - 1)];
   layout(); sendState();

@@ -21,10 +21,18 @@ const SEARCH_TEMPLATES = Object.freeze({
 });
 
 const DEFAULT_PREFERENCES = Object.freeze({
+  general: Object.freeze({
+    restoreTabs: true,
+  }),
   theme: Object.freeze({
     accentColor: '#b49bf8',
     hideLogo: false,
     hideModuleText: false,
+    mode: 'dark',
+  }),
+  shortcuts: Object.freeze({
+    typing: 'Ctrl+9',
+    fullscreen: 'Ctrl+F',
   }),
   typing: Object.freeze({ speed: 1 }),
   search: Object.freeze({ engine: 'google', customTemplate: '' }),
@@ -53,6 +61,12 @@ function objectInput(value, label) {
   return value;
 }
 
+function normalizeGeneral(input = DEFAULT_PREFERENCES.general) {
+  objectInput(input, 'general');
+  const restoreTabs = input.restoreTabs !== false;
+  return { restoreTabs };
+}
+
 function normalizeTheme(input = DEFAULT_PREFERENCES.theme) {
   objectInput(input, 'theme');
   const accentColor = typeof input.accentColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(input.accentColor.trim())
@@ -60,7 +74,108 @@ function normalizeTheme(input = DEFAULT_PREFERENCES.theme) {
     : DEFAULT_PREFERENCES.theme.accentColor;
   const hideLogo = Boolean(input.hideLogo);
   const hideModuleText = Boolean(input.hideModuleText);
-  return { accentColor, hideLogo, hideModuleText };
+  const mode = input.mode === 'light' ? 'light' : 'dark';
+  return { accentColor, hideLogo, hideModuleText, mode };
+}
+
+const VALID_SHORTCUT_KEYS = new Set([
+  '0','1','2','3','4','5','6','7','8','9',
+  'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z',
+  'space','enter','tab','escape','backspace','delete','insert','home','end','pageup','pagedown',
+  'arrowup','arrowdown','arrowleft','arrowright'
+]);
+for (let i = 1; i <= 24; i++) VALID_SHORTCUT_KEYS.add('f' + i);
+
+function parseShortcut(shortcutStr) {
+  if (typeof shortcutStr !== 'string') return null;
+  const parts = shortcutStr.trim().split('+').map(p => p.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  let ctrl = false;
+  let alt = false;
+  let shift = false;
+  let meta = false;
+  let key = null;
+
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    const low = part.toLowerCase();
+    if (low === 'ctrl' || low === 'control' || low === 'cmdorctrl') {
+      ctrl = true;
+    } else if (low === 'cmd' || low === 'command' || low === 'meta') {
+      meta = true;
+    } else if (low === 'alt' || low === 'option') {
+      alt = true;
+    } else if (low === 'shift') {
+      shift = true;
+    } else {
+      key = low;
+    }
+  }
+  if (!key || !VALID_SHORTCUT_KEYS.has(key)) return null;
+  if (!ctrl && !alt && !meta && !/^f\d{1,2}$/i.test(key)) return null;
+  return { ctrl, alt, shift, meta, key };
+}
+
+function formatShortcut(shortcutStr) {
+  const parsed = parseShortcut(shortcutStr);
+  if (!parsed) return null;
+  const parts = [];
+  if (parsed.ctrl) parts.push('Ctrl');
+  if (parsed.alt) parts.push('Alt');
+  if (parsed.shift) parts.push('Shift');
+  if (parsed.meta) parts.push('Cmd');
+  let k = parsed.key;
+  if (k.length === 1) k = k.toUpperCase();
+  else if (/^f\d{1,2}$/i.test(k)) k = k.toUpperCase();
+  else k = k[0].toUpperCase() + k.slice(1);
+  parts.push(k);
+  return parts.join('+');
+}
+
+function matchesShortcut(parsed, input) {
+  if (!parsed || !input) return false;
+  const isDarwin = process.platform === 'darwin';
+
+  const eventCtrl = Boolean(input.control ?? input.ctrlKey);
+  const eventMeta = Boolean(input.meta ?? input.metaKey);
+  const eventAlt = Boolean(input.alt ?? input.altKey);
+  const eventShift = Boolean(input.shift ?? input.shiftKey);
+  const eventKey = String(input.key || '').toLowerCase();
+  const eventCode = String(input.code || '').toLowerCase();
+
+  let modMatches = false;
+  if (parsed.ctrl && !parsed.meta) {
+    modMatches = isDarwin ? (eventMeta || eventCtrl) : eventCtrl;
+  } else if (parsed.meta && !parsed.ctrl) {
+    modMatches = eventMeta;
+  } else if (parsed.ctrl && parsed.meta) {
+    modMatches = eventCtrl && eventMeta;
+  } else {
+    modMatches = !eventCtrl && !eventMeta;
+  }
+
+  if (!modMatches) return false;
+  if (parsed.alt !== eventAlt) return false;
+  if (parsed.shift !== eventShift) return false;
+
+  const pKey = parsed.key.toLowerCase();
+  if (eventKey === pKey) return true;
+  if (eventCode === `key${pKey}`) return true;
+  if (eventCode === `digit${pKey}`) return true;
+  if (pKey === 'space' && (eventKey === ' ' || eventCode === 'space')) return true;
+
+  return false;
+}
+
+function normalizeShortcuts(input = DEFAULT_PREFERENCES.shortcuts) {
+  objectInput(input, 'shortcuts');
+  const typing = typeof input.typing === 'string' && formatShortcut(input.typing)
+    ? formatShortcut(input.typing)
+    : DEFAULT_PREFERENCES.shortcuts.typing;
+  const fullscreen = typeof input.fullscreen === 'string' && formatShortcut(input.fullscreen)
+    ? formatShortcut(input.fullscreen)
+    : DEFAULT_PREFERENCES.shortcuts.fullscreen;
+  return { typing, fullscreen };
 }
 
 function normalizeTyping(input = DEFAULT_PREFERENCES.typing) {
@@ -224,7 +339,7 @@ function publicProxyConfig(config) {
 }
 
 module.exports = {
-  SEARCH_ENGINES, DEFAULT_PREFERENCES, normalizeTheme, normalizeSearch, searchURL, normalizeTyping,
+  SEARCH_ENGINES, DEFAULT_PREFERENCES, normalizeGeneral, normalizeTheme, normalizeShortcuts, parseShortcut, formatShortcut, matchesShortcut, normalizeSearch, searchURL, normalizeTyping,
   normalizeSpoof, SUPPORTED_SPOOF_PLATFORMS, SUPPORTED_SPOOF_BROWSERS,
   normalizeProxy, publicProxyConfig, normalizeProxyHost,
 };

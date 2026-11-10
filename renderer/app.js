@@ -9,7 +9,7 @@ const icons = {
   settings:'m9 3 1-1h4l1 3 3 1 3 1v4l-2 1v3l1 3-3 2-3-1-3 1-2 1-3-2v-3l-1-3-2-2 2-3 2 1 2-2zM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0',
   sliders:'M4 7h7m4 0h5M4 17h3m4 0h9M11 4v6M7 14v6',shield:'m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6zM8 12l3 3 5-6',lock:'M6 10h12v11H6zM8 10V7a4 4 0 1 1 8 0v3',globe:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18',
   pause:'M8 5v14M16 5v14',play:'m6 3 15 9-15 9Z',trash:'M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7',export:'M12 15V3m-5 5 5-5 5 5M4 14v7h16v-7',cookie:'M20 12a8 8 0 1 1-8-8c0 3 1 4 4 4 0 3 1 4 4 4M8 9h.01M7 14h.01M12 17h.01M12 12h.01',
-  check:'m5 12 4 4L19 6',alert:'m12 3 10 18H2Zm0 6v5m0 3h.01',stop:'M5 5h14v14H5z',folder:'M3 6h7l2 3h9v12H3z',edit:'m15 4 5 5M4 20l5-1L21 7l-5-5L4 14z',wifi:'M3 7a15 15 0 0 1 18 0M6 11a10 10 0 0 1 12 0M9 15a5 5 0 0 1 6 0M12 19h.01',circle:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',prism:'m12 3 10 18H2zM12 3l2 18M2 21l13-10',
+  check:'m5 12 4 4L19 6',alert:'m12 3 10 18H2Zm0 6v5m0 3h.01',stop:'M5 5h14v14H5z',folder:'M3 6h7l2 3h9v12H3z',edit:'m15 4 5 5M4 20l5-1L21 7l-5-5L4 14z',wifi:'M3 7a15 15 0 0 1 18 0M6 11a10 10 0 0 1 12 0M9 15a5 5 0 0 1 6 0M12 19h.01',circle:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',prism:'m12 3 10 18H2zM12 3l2 18M2 21l13-10',compass:'M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm3.5 6.5-2.5 6-6 2.5 2.5-6z',terminal:'m4 17 6-6-6-6m8 14h8',sun:'M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364-.707-.707M6.343 6.343l-.707-.707m12.728 0-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0',moon:'M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z',
 };
 const $ = (selector, parent = document) => parent.querySelector(selector);
 const $$ = (selector, parent = document) => [...parent.querySelectorAll(selector)];
@@ -18,7 +18,70 @@ const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ico
 const paintIcons = (scope = document) => $$('[data-icon]', scope).forEach(el => { el.innerHTML = icon(el.dataset.icon); });
 const uid = () => crypto.randomUUID();
 const preview = !window.prism;
-const defaultTheme={accentColor:'#b49bf8',hideLogo:false,hideModuleText:false};
+const defaultGeneral={restoreTabs:true};
+const defaultTheme={accentColor:'#b49bf8',hideLogo:false,hideModuleText:false,mode:'dark'};
+const defaultShortcuts={typing:'Ctrl+9',fullscreen:'Ctrl+F'};
+
+const VALID_SHORTCUT_KEYS = new Set([
+  '0','1','2','3','4','5','6','7','8','9',
+  'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z',
+  'space','enter','tab','escape','backspace','delete','insert','home','end','pageup','pagedown',
+  'arrowup','arrowdown','arrowleft','arrowright'
+]);
+for (let i = 1; i <= 24; i++) VALID_SHORTCUT_KEYS.add('f' + i);
+
+function parseShortcut(shortcutStr) {
+  if (typeof shortcutStr !== 'string') return null;
+  const parts = shortcutStr.trim().split('+').map(p => p.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  let ctrl = false, alt = false, shift = false, meta = false, key = null;
+  for (const part of parts) {
+    const low = part.toLowerCase();
+    if (low === 'ctrl' || low === 'control' || low === 'cmdorctrl') ctrl = true;
+    else if (low === 'cmd' || low === 'command' || low === 'meta') meta = true;
+    else if (low === 'alt' || low === 'option') alt = true;
+    else if (low === 'shift') shift = true;
+    else key = low;
+  }
+  if (!key || !VALID_SHORTCUT_KEYS.has(key)) return null;
+  if (!ctrl && !alt && !meta && !/^f\d{1,2}$/i.test(key)) return null;
+  return { ctrl, alt, shift, meta, key };
+}
+
+function matchesShortcut(parsed, event) {
+  if (!parsed || !event) return false;
+  const isDarwin = (typeof navigator !== 'undefined' && navigator.platform?.toLowerCase().includes('mac'));
+  const eventCtrl = Boolean(event.ctrlKey || event.control);
+  const eventMeta = Boolean(event.metaKey || event.meta);
+  const eventAlt = Boolean(event.altKey || event.alt);
+  const eventShift = Boolean(event.shiftKey || event.shift);
+  const eventKey = String(event.key || '').toLowerCase();
+  const eventCode = String(event.code || '').toLowerCase();
+
+  let modMatches = false;
+  if (parsed.ctrl && !parsed.meta) {
+    modMatches = isDarwin ? (eventMeta || eventCtrl) : eventCtrl;
+  } else if (parsed.meta && !parsed.ctrl) {
+    modMatches = eventMeta;
+  } else if (parsed.ctrl && parsed.meta) {
+    modMatches = eventCtrl && eventMeta;
+  } else {
+    modMatches = !eventCtrl && !eventMeta;
+  }
+
+  if (!modMatches) return false;
+  if (parsed.alt !== eventAlt) return false;
+  if (parsed.shift !== eventShift) return false;
+
+  const pKey = parsed.key.toLowerCase();
+  if (eventKey === pKey) return true;
+  if (eventCode === `key${pKey}`) return true;
+  if (eventCode === `digit${pKey}`) return true;
+  if (pKey === 'space' && (eventKey === ' ' || eventCode === 'space')) return true;
+
+  return false;
+}
+
 function applyTheme(theme) {
   const accent = (typeof theme?.accentColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(theme.accentColor.trim()))
     ? theme.accentColor.trim().toLowerCase()
@@ -28,6 +91,20 @@ function applyTheme(theme) {
   const g = parseInt(accent.slice(3, 5), 16) || 155;
   const b = parseInt(accent.slice(5, 7), 16) || 248;
   document.documentElement.style.setProperty('--purple-glow', `rgba(${r}, ${g}, ${b}, 0.28)`);
+  const isLight = theme?.mode === 'light';
+  const cloudAlpha = isLight ? 0.16 : 0.22;
+  document.documentElement.style.setProperty('--newtab-glow', `rgba(${r}, ${g}, ${b}, ${cloudAlpha})`);
+  document.documentElement.style.setProperty('--purple-symbol-border', `rgba(${r}, ${g}, ${b}, 0.8)`);
+  document.documentElement.style.setProperty('--purple-symbol-mid', `rgba(${r}, ${g}, ${b}, 0.6)`);
+
+  if (isLight) {
+    document.documentElement.dataset.theme = 'light';
+    document.body.classList.add('light-mode');
+  } else {
+    document.documentElement.dataset.theme = 'dark';
+    document.body.classList.remove('light-mode');
+  }
+
   document.body.classList.toggle('hide-brand-logo', Boolean(theme?.hideLogo));
   document.body.classList.toggle('compact-module-buttons', Boolean(theme?.hideModuleText));
 }
@@ -39,7 +116,7 @@ const defaultSpoof={focusVisibility:true,fullscreen:true,keyboard:true,clipboard
 const defaultAdblock={enabled:true,allowlist:[],blocklist:[],blockedCount:0,ready:false,error:'',engineName:'Adblock Plus core'};
 const searchEngines={duckduckgo:['DuckDuckGo','https://duckduckgo.com/?q={query}'],google:['Google','https://www.google.com/search?q={query}'],bing:['Bing','https://www.bing.com/search?q={query}'],brave:['Brave Search','https://search.brave.com/search?q={query}'],startpage:['Startpage','https://www.startpage.com/sp/search?query={query}'],custom:['Custom search engine','']};
 const settingsDrafts={};
-let state = { tabs:[],activeTabId:null,bookmarks:[],history:[],downloads:[],rules:[],profilePath:'',networkPaused:false,networkCount:0,theme:{...defaultTheme},typing:{...defaultTyping},search:{...defaultSearch},proxy:{...defaultProxy},adblock:{...defaultAdblock},spoof:{...defaultSpoof} };
+let state = { tabs:[],activeTabId:null,bookmarks:[],history:[],downloads:[],rules:[],profilePath:'',networkPaused:false,networkCount:0,general:{...defaultGeneral},theme:{...defaultTheme},shortcuts:{...defaultShortcuts},typing:{...defaultTyping},search:{...defaultSearch},proxy:{...defaultProxy},adblock:{...defaultAdblock},spoof:{...defaultSpoof} };
 let pane = null;
 let entries = [];
 let selectedEntry = null;
@@ -348,10 +425,11 @@ function detailHTML(entry) {
 function renderSettings() {
   const previousScroll=$('.settings-scroll')?.scrollTop||0;const focusedId=document.activeElement?.closest('.settings-form')?document.activeElement.id:null;const selection=focusedId&&typeof document.activeElement.selectionStart==='number'?[document.activeElement.selectionStart,document.activeElement.selectionEnd]:null;
   const currentHost=hostname(activeTab()?.url);
-  const theme={...defaultTheme,...state.theme,...settingsDrafts.theme};const typing={...state.typing,...settingsDrafts.typing};const search={...state.search,...settingsDrafts.search};const proxy={...state.proxy,...settingsDrafts.proxy};const blocker={...state.adblock,...settingsDrafts.adblock};const spoof={...defaultSpoof,...state.spoof,...settingsDrafts.spoof};
-  $('#side-panel').innerHTML=panelHeader('Browser settings','sliders')+`<p class="panel-subtitle">Make the web feel more like yours.</p><nav class="settings-nav" aria-label="Settings sections"><button data-settings-section="theme">Theme</button><button data-settings-section="search">Search</button><button data-settings-section="typing">Typing</button><button data-settings-section="spoof">Spoof mode</button><button data-settings-section="proxy">Proxy</button><button data-settings-section="adblock">Ad blocker</button><button data-settings-section="sites">Sites</button></nav><div class="panel-scroll settings-scroll">
+  const general={...defaultGeneral,...state.general,...settingsDrafts.general};const theme={...defaultTheme,...state.theme,...settingsDrafts.theme};const shortcuts={...defaultShortcuts,...state.shortcuts,...settingsDrafts.shortcuts};const typing={...state.typing,...settingsDrafts.typing};const search={...state.search,...settingsDrafts.search};const proxy={...state.proxy,...settingsDrafts.proxy};const blocker={...state.adblock,...settingsDrafts.adblock};const spoof={...defaultSpoof,...state.spoof,...settingsDrafts.spoof};
+  $('#side-panel').innerHTML=panelHeader('Browser settings','sliders')+`<p class="panel-subtitle">Make the web feel more like yours.</p><nav class="settings-nav" aria-label="Settings sections"><button data-settings-section="general">General</button><button data-settings-section="theme">Theme</button><button data-settings-section="shortcuts">Shortcuts</button><button data-settings-section="search">Search</button><button data-settings-section="typing">Typing</button><button data-settings-section="spoof">Spoof mode</button><button data-settings-section="proxy">Proxy</button><button data-settings-section="adblock">Ad blocker</button><button data-settings-section="sites">Sites</button></nav><div class="panel-scroll settings-scroll">
     ${preview?'<div class="preview-notice">Interactive desktop preview. Proxy routing, ad blocking, browsing, and spoof mode run in the Electron app.</div>':''}
-    <section id="settings-theme" class="settings-section" tabindex="-1"><h3 class="section-label">THEME & APPEARANCE</h3><form id="theme-settings-form" class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('edit')}</span><div><h3>Accent color &amp; appearance</h3><p>Customize Prism’s accent color and toolbar interface.</p></div></div><label class="field-label">Accent color</label><div class="theme-color-palette">${[
+    <section id="settings-general" class="settings-section" tabindex="-1"><h3 class="section-label">GENERAL &amp; STARTUP</h3><form id="general-settings-form" class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('compass')}</span><div><h3>Browser startup</h3><p>Choose what opens when you start Prism.</p></div></div><div class="general-toggles"><label class="setting-line form-switch"><span>Reopen tabs on launch<small>Restore all open tabs from your previous browsing session when starting Prism</small></span><input id="general-restore-tabs" type="checkbox" class="switch-input" ${(general.restoreTabs!==false)?'checked':''}></label></div><button class="primary-button full-width" type="submit">Save startup preferences</button></form></section>
+    <section id="settings-theme" class="settings-section" tabindex="-1"><h3 class="section-label">THEME &amp; APPEARANCE</h3><form id="theme-settings-form" class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('edit')}</span><div><h3>Accent color &amp; appearance</h3><p>Customize Prism’s accent color, theme mode, and interface.</p></div></div><label class="field-label">Color scheme</label><div class="theme-mode-options"><button type="button" class="theme-mode-btn ${theme.mode!=='light'?'active':''}" data-mode="dark">${icon('moon')}<span>Dark (Default)</span></button><button type="button" class="theme-mode-btn ${theme.mode==='light'?'active':''}" data-mode="light">${icon('sun')}<span>Light</span></button></div><label class="field-label">Accent color</label><div class="theme-color-palette">${[
       ['#b49bf8','Purple (Default)'],
       ['#60a5fa','Sky Blue'],
       ['#38bdf8','Cyan'],
@@ -363,8 +441,9 @@ function renderSettings() {
       ['#ec4899','Pink'],
       ['#818cf8','Indigo']
     ].map(([hex,label])=>`<button type="button" class="theme-color-swatch ${(theme.accentColor||'#b49bf8').toLowerCase()===hex.toLowerCase()?'active':''}" data-color="${hex}" title="${label}" style="background-color: ${hex}"></button>`).join('')}<div class="theme-custom-color" title="Custom color"><input type="color" id="theme-custom-picker" value="${theme.accentColor||'#b49bf8'}" aria-label="Custom color picker"></div></div><label class="field-label" for="theme-hex-input">Custom Hex Code</label><div class="theme-hex-row"><input class="field-input" id="theme-hex-input" type="text" placeholder="#b49bf8" value="${escape(theme.accentColor||'#b49bf8')}" spellcheck="false" maxlength="7"></div><div class="theme-toggles"><label class="setting-line form-switch"><span>Hide brand logo<small>Hides the "prism." wordmark in the top-left titlebar</small></span><input id="theme-hide-logo" type="checkbox" class="switch-input" ${theme.hideLogo?'checked':''}></label><label class="setting-line form-switch"><span>Hide module buttons text<small>Only show icons and dropdowns for Spoof mode, Proxy, and Ad blocker</small></span><input id="theme-hide-module-text" type="checkbox" class="switch-input" ${theme.hideModuleText?'checked':''}></label></div><button class="primary-button full-width" type="submit">Save theme preferences</button></form></section>
+    <section id="settings-shortcuts" class="settings-section" tabindex="-1"><h3 class="section-label">KEYBOARD SHORTCUTS</h3><form id="shortcuts-settings-form" class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('terminal')}</span><div><h3>Shortcut customization</h3><p>Remap built-in shortcuts. Press key combinations or edit text directly.</p></div></div><label class="field-label" for="shortcut-typing">Clipboard typing</label><div class="shortcut-input-row"><input class="field-input shortcut-input" id="shortcut-typing" type="text" value="${escape(shortcuts.typing||'Ctrl+9')}" placeholder="Ctrl+9" spellcheck="false" autocomplete="off"><button type="button" class="secondary-button shortcut-reset-btn" data-reset-target="shortcut-typing" data-default="Ctrl+9" title="Reset to default">Reset</button></div><p class="field-help">Types clipboard text into focused input fields character by character. Default: <code>Ctrl+9</code> (or <code>Command+9</code> on macOS).</p><label class="field-label" for="shortcut-fullscreen">Toggle fullscreen</label><div class="shortcut-input-row"><input class="field-input shortcut-input" id="shortcut-fullscreen" type="text" value="${escape(shortcuts.fullscreen||'Ctrl+F')}" placeholder="Ctrl+F" spellcheck="false" autocomplete="off"><button type="button" class="secondary-button shortcut-reset-btn" data-reset-target="shortcut-fullscreen" data-default="Ctrl+F" title="Reset to default">Reset</button></div><p class="field-help">Toggles the browser window in and out of fullscreen mode. Default: <code>Ctrl+F</code> (or <code>Command+F</code> on macOS). <code>F11</code> also works.</p><button class="primary-button full-width" type="submit">Save shortcuts</button></form></section>
     <section id="settings-search" class="settings-section" tabindex="-1"><h3 class="section-label">SEARCH & NAVIGATION</h3><form id="search-settings-form" class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('search')}</span><div><h3>Your default search engine</h3><p>Used by the address bar and new tab search.</p></div></div><label class="field-label" for="search-engine">Search engine</label><select class="field-input" id="search-engine">${Object.entries(searchEngines).map(([value,[label]])=>`<option value="${value}" ${search.engine===value?'selected':''}>${label}</option>`).join('')}</select><div id="custom-search-fields" ${search.engine==='custom'?'':'hidden'}><label class="field-label" for="search-template">Custom search URL</label><input class="field-input" id="search-template" type="text" placeholder="https://example.com/search?q={query}" value="${escape(search.customTemplate)}" autocomplete="off" spellcheck="false"><p class="field-help">Use an HTTPS URL with <code>{query}</code> where the search words should go.</p></div><button type="submit" class="primary-button full-width">Save search engine</button></form></section>
-    <section id="settings-typing" class="settings-section" tabindex="-1"><h3 class="section-label">CLIPBOARD TYPING</h3><div class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('sliders')}</span><div><h3>Typing speed</h3><p>Type clipboard text with Ctrl+9 or Command+9 on macOS.</p></div></div><div class="typing-speed-label"><label class="field-label" for="typing-speed">Speed</label><output id="typing-speed-value" for="typing-speed">${typingSpeedLabel(typing.speed)}</output></div><input id="typing-speed" class="typing-speed-slider" type="range" min="0.25" max="3" step="0.25" value="${typing.speed}" aria-valuetext="${typingSpeedLabel(typing.speed)}" aria-describedby="typing-speed-help"><div class="typing-speed-scale"><span>Slower · 0.25×</span><span>Faster · 3×</span></div><p id="typing-speed-help" class="form-footnote">Random timing and natural pauses stay on at every speed. Changes save automatically. Press Escape or the shortcut again to stop typing.</p></div></section>
+    <section id="settings-typing" class="settings-section" tabindex="-1"><h3 class="section-label">CLIPBOARD TYPING</h3><div class="settings-card settings-form"><div class="settings-heading"><span class="settings-symbol">${icon('sliders')}</span><div><h3>Typing speed</h3><p>Type clipboard text with ${escape(shortcuts.typing||'Ctrl+9')} (press again or Escape to stop).</p></div></div><div class="typing-speed-label"><label class="field-label" for="typing-speed">Speed</label><output id="typing-speed-value" for="typing-speed">${typingSpeedLabel(typing.speed)}</output></div><input id="typing-speed" class="typing-speed-slider" type="range" min="0.25" max="3" step="0.25" value="${typing.speed}" aria-valuetext="${typingSpeedLabel(typing.speed)}" aria-describedby="typing-speed-help"><div class="typing-speed-scale"><span>Slower · 0.25×</span><span>Faster · 3×</span></div><p id="typing-speed-help" class="form-footnote">Random timing and natural pauses stay on at every speed. Changes save automatically. Press Escape or the shortcut again to stop typing.</p></div></section>
         <section id="settings-spoof" class="settings-section" tabindex="-1"><h3 class="section-label">SPOOF MODE PREFERENCES</h3><form id="spoof-settings-form" class="settings-form">
     <div class="settings-card"><div class="settings-heading" style="margin-bottom:0"><span class="settings-symbol">${icon('focus')}</span><div><h3>Spoof mode features</h3><p style="margin-bottom:0">Configure which protections and overrides are active when spoof mode is enabled.</p></div></div></div>
     <div class="spoof-card"><label class="spoof-card-header" for="spoof-focus-visibility"><div class="spoof-card-info"><h4>Focus &amp; document visibility</h4><p>Report active, focused, and visible document state to defeat tab-switch detection.</p></div><input id="spoof-focus-visibility" type="checkbox" class="switch-input" role="switch" ${spoof.focusVisibility?'checked':''}></label></div>
@@ -384,6 +463,40 @@ function renderSettings() {
     <section id="settings-profile" class="settings-section"><h3 class="section-label">YOUR LOCAL PROFILE</h3><div class="settings-card"><h3>Sessions that stay with you</h3><p>Cookies and site storage are kept in a separate profile between launches.</p><p class="profile-path">${escape(state.profilePath||'Managed by Prism on this device')}</p><button class="secondary-button full-width" data-action="view-cookies">${icon('cookie')}Inspect cookies${currentHost?' for this site':''}</button>${currentHost?`<button class="danger-button full-width" data-action="clear-site-data">Clear data for ${escape(currentHost)}</button>`:''}</div></section>
     </div><div class="panel-footer"><span>${icon('lock')}Your browser preferences</span><span>Stored on this device</span></div>`;
   if(settingsDrafts.proxy){$('#proxy-username').value=settingsDrafts.proxy.username||'';$('#proxy-password').value=settingsDrafts.proxy.password||'';}
+  $('#general-settings-form')?.addEventListener('submit',saveGeneralSettings);
+  $('#shortcuts-settings-form')?.addEventListener('submit',saveShortcutsSettings);
+  $$('.theme-mode-btn').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const mode=btn.dataset.mode;
+      $$('.theme-mode-btn').forEach(b=>b.classList.toggle('active',b===btn));
+      const draft={...(settingsDrafts.theme||state.theme),mode};
+      settingsDrafts.theme=draft;
+      applyTheme(draft);
+    });
+  });
+  $$('.shortcut-input').forEach(input=>{
+    input.addEventListener('keydown',e=>{
+      if(e.key==='Tab')return;
+      e.preventDefault();e.stopPropagation();
+      if(['Control','Shift','Alt','Meta'].includes(e.key))return;
+      const parts=[];if(e.ctrlKey)parts.push('Ctrl');if(e.altKey)parts.push('Alt');if(e.shiftKey)parts.push('Shift');if(e.metaKey)parts.push('Cmd');
+      let keyName=e.key;
+      if(e.code&&e.code.startsWith('Key'))keyName=e.code.slice(3);
+      else if(e.code&&e.code.startsWith('Digit'))keyName=e.code.slice(5);
+      else if(e.key===' ')keyName='Space';
+      else if(keyName.length===1)keyName=keyName.toUpperCase();
+      parts.push(keyName);
+      input.value=parts.join('+');
+    });
+  });
+  $$('.shortcut-reset-btn').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const targetId=btn.dataset.resetTarget;
+      const def=btn.dataset.default;
+      const input=$('#'+targetId);
+      if(input&&def)input.value=def;
+    });
+  });
   $('#theme-settings-form')?.addEventListener('submit',saveThemeSettings);
   $$('.theme-color-swatch').forEach(swatch=>{
     swatch.addEventListener('click',()=>{
@@ -481,14 +594,31 @@ async function savePreference(key,value,action,message) {
   delete settingsDrafts[key];if(result.tabs)renderState(result);else if(result.state)renderState(result.state);else {const next=await invoke('get-state');if(next?.tabs)renderState(next);}
   if(pane==='settings'){renderSettings();$('.settings-scroll').scrollTop=scroll;}renderChrome();toast(preview?`${message} Preview preferences saved.`:message);return true;
 }
+async function saveGeneralSettings(event) {
+  event.preventDefault();
+  const general={restoreTabs:Boolean($('#general-restore-tabs')?.checked)};
+  delete settingsDrafts.general;
+  await savePreference('general',general,'general-save','Startup preferences saved.');
+}
+async function saveShortcutsSettings(event) {
+  event.preventDefault();
+  const shortcuts={
+    typing:($('#shortcut-typing')?.value||'Ctrl+9').trim(),
+    fullscreen:($('#shortcut-fullscreen')?.value||'Ctrl+F').trim()
+  };
+  delete settingsDrafts.shortcuts;
+  await savePreference('shortcuts',shortcuts,'shortcuts-save','Keyboard shortcuts saved.');
+}
 async function saveThemeSettings(event) {
   event.preventDefault();
   let hex=($('#theme-hex-input')?.value||'').trim();
   if(!hex.startsWith('#')&&hex.length===6)hex='#'+hex;
+  const isLight=document.body.classList.contains('light-mode');
   const theme={
     accentColor:/^#[0-9a-fA-F]{6}$/.test(hex)?hex.toLowerCase():(state.theme?.accentColor||defaultTheme.accentColor),
     hideLogo:Boolean($('#theme-hide-logo')?.checked),
-    hideModuleText:Boolean($('#theme-hide-module-text')?.checked)
+    hideModuleText:Boolean($('#theme-hide-module-text')?.checked),
+    mode:isLight?'light':'dark'
   };
   delete settingsDrafts.theme;
   applyTheme(theme);
@@ -854,7 +984,8 @@ $('#zoom-out').addEventListener('click',()=>invoke('zoom',{delta:-.1}));$('#zoom
 function openFind(){$('#find-bar').hidden=false;$('#main-surface').classList.add('find-open');$('#find-input').focus();requestViewport();}
 function closeFind(){$('#find-bar').hidden=true;$('#main-surface').classList.remove('find-open');invoke('find-stop');requestViewport();}
 $('#find-close').addEventListener('click',closeFind);$('#find-input').addEventListener('input',()=>invoke('find',{text:$('#find-input').value}));$('#find-input').addEventListener('keydown',event=>{if(event.key==='Enter')invoke('find',{text:$('#find-input').value,forward:!event.shiftKey});if(event.key==='Escape')closeFind();});$('#find-next').addEventListener('click',()=>invoke('find',{text:$('#find-input').value,forward:true}));$('#find-previous').addEventListener('click',()=>invoke('find',{text:$('#find-input').value,forward:false}));
-document.addEventListener('keydown',event=>{const modifier=event.ctrlKey||event.metaKey;if(!modifier){if(event.key==='Escape'){if(document.body.classList.contains('fullscreen-mode')){event.preventDefault();invoke('window-fullscreen-exit');}}return;}const key=event.key.toLowerCase();if(['l','k','t','w','r'].includes(key)){event.preventDefault();if(key==='l'||key==='k'){$('#address').focus();$('#address').select();}if(key==='t')newBlankTab();if(key==='w')invoke('tab-close',{id:state.activeTabId});if(key==='r')invoke('reload');}if(key==='f'){event.preventDefault();invoke('window-fullscreen-toggle');}if(key==='+'||key==='='){event.preventDefault();invoke('zoom',{delta:.1});}if(key==='-'){event.preventDefault();invoke('zoom',{delta:-.1});}if(key==='0'){event.preventDefault();invoke('zoom',{delta:1-(activeTab()?.zoom||1)});} });
+document.addEventListener('keydown',event=>{const modifier=event.ctrlKey||event.metaKey;if(!modifier){if(event.key==='Escape'){if(document.body.classList.contains('fullscreen-mode')){event.preventDefault();invoke('window-fullscreen-exit');}}return;}const key=event.key.toLowerCase();if(['l','k','t','w','r'].includes(key)){event.preventDefault();if(key==='l'||key==='k'){$('#address').focus();$('#address').select();}if(key==='t')newBlankTab();if(key==='w')invoke('tab-close',{id:state.activeTabId});if(key==='r')invoke('reload');}const fullscreenShortcut = state.shortcuts?.fullscreen || 'Ctrl+F';
+if(matchesShortcut(parseShortcut(fullscreenShortcut), event)){event.preventDefault();invoke('window-fullscreen-toggle');return;}if(key==='+'||key==='='){event.preventDefault();invoke('zoom',{delta:.1});}if(key==='-'){event.preventDefault();invoke('zoom',{delta:-.1});}if(key==='0'){event.preventDefault();invoke('zoom',{delta:1-(activeTab()?.zoom||1)});} });
 $('#modal').addEventListener('close',requestViewport);$('#modal').addEventListener('cancel',()=>requestViewport());
 window.addEventListener('resize',requestViewport);new ResizeObserver(requestViewport).observe($('#viewport'));new ResizeObserver(updateTabDensity).observe($('#tabs'));
 bridge.on('state',next=>{stateEventVersion++;renderState(next);});

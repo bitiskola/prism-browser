@@ -3,12 +3,26 @@
   --bg: #101114;
   --surface: #17181d;
   --surface-2: #1e1f26;
+  --surface-card: #1c1b24;
+  --surface-input: #14131a;
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(255, 255, 255, 0.14);
   --muted: #848894;
   --text: #ebeaf1;
   --purple: #b49bf8;
   --purple-glow: rgba(180, 155, 248, 0.28);
+  --newtab-glow: rgba(180, 155, 248, 0.22);
+  --purple-symbol-border: #c7b2ff;
+  --purple-symbol-mid: #7f67b9;
+  --symbol-dark: #252332;
+  --titlebar-bg: #111216;
+  --toolbar-bg: #18191e;
+  --tab-active-bg: #2b2a33;
+  --tab-active-color: #ffffff;
+  --tab-hover-bg: rgba(255, 255, 255, 0.08);
+  --address-bg: #23222b;
+  --address-text: #ffffff;
+  --address-placeholder: #7f828f;
   --mint: #82cfb2;
   --panel: 400px;
   --ease-snappy: cubic-bezier(0.2, 0, 0, 1);
@@ -61,7 +75,7 @@ button svg { flex-shrink: 0; }
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #111216;
+  background: var(--titlebar-bg, #111216);
   padding: 0 0 0 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   -webkit-app-region: drag;
@@ -87,10 +101,10 @@ button svg { flex-shrink: 0; }
   height: 20px;
   width: 20px;
   margin-right: 8px;
-  border: 1.8px solid #c7b2ff;
+  border: 1.8px solid var(--purple-symbol-border, #c7b2ff);
   transform: rotate(-12deg);
   clip-path: polygon(50% 0, 100% 100%, 0 100%);
-  background: linear-gradient(125deg, #c4acf5 0, #7f67b9 44%, #252332 46%, #8673b5 100%);
+  background: linear-gradient(125deg, var(--purple) 0, var(--purple-symbol-mid, #7f67b9) 44%, var(--symbol-dark, #252332) 46%, var(--purple) 100%);
   flex-shrink: 0;
 }
 
@@ -126,8 +140,8 @@ button svg { flex-shrink: 0; }
   color: #dedce6;
 }
 .tab.active {
-  background: #2b2a33;
-  color: #ffffff;
+  background: var(--tab-active-bg, #2b2a33);
+  color: var(--tab-active-color, #ffffff);
   border: 1px solid rgba(255, 255, 255, 0.11);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
 }
@@ -303,7 +317,7 @@ button svg { flex-shrink: 0; }
    ========================================================================== */
 .toolbar {
   height: 44px;
-  background: #18191e;
+  background: var(--toolbar-bg, #18191e);
   border-bottom: 1px solid rgba(255, 255, 255, 0.07);
   display: flex;
   gap: 10px;
@@ -339,8 +353,8 @@ button svg { flex-shrink: 0; }
 
 .address-bar {
   height: 34px;
-  background: #23222b;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--address-bg, #23222b);
+  border: 1px solid var(--line);
   display: flex;
   align-items: center;
   border-radius: 8px;
@@ -563,7 +577,7 @@ button svg { flex-shrink: 0; }
   position: relative;
   display: flex;
   flex-direction: column;
-  background: radial-gradient(ellipse at 50% 20%, #1f1b29 0%, #111216 70%);
+  background: radial-gradient(ellipse at 50% 18%, var(--newtab-glow, rgba(180, 155, 248, 0.22)) 0%, var(--bg) 65%);
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: thin;
@@ -1496,8 +1510,8 @@ button svg { flex-shrink: 0; }
 /* Statusbar */
 .statusbar {
   height: 26px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  background: #111216;
+  border-top: 1px solid var(--line);
+  background: var(--titlebar-bg, #111216);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2180,4 +2194,140 @@ body.compact-module-buttons .privacy-tools .toolbar-mini {
   display: flex;
   gap: 12px;
   align-items: center;
+}
+
+/* ==========================================================================
+   Theme Mode Options & Keyboard Shortcuts
+   ========================================================================== */
+.theme-mode-options {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.theme-mode-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-weight: 500;
+  font-size: 12.5px;
+  transition: all 0.15s ease;
+}
+.theme-mode-btn svg {
+  width: 15px;
+  height: 15px;
+}
+.theme-mode-btn:hover:not(.active) {
+  background: var(--line-strong);
+}
+.theme-mode-btn.active {
+  border-color: var(--purple);
+  background: var(--purple-glow);
+  color: var(--purple);
+}
+
+.general-toggles {
+  margin-bottom: 8px;
+}
+
+.shortcut-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.shortcut-input-row .field-input {
+  margin-bottom: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.shortcut-reset-btn {
+  padding: 8px 12px;
+  font-size: 11.5px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  transition: all 0.15s ease;
+}
+.shortcut-reset-btn:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+/* ==========================================================================
+   Light Mode Theme
+   ========================================================================== */
+:root[data-theme="light"],
+body.light-mode {
+  color-scheme: light;
+  --bg: #f3f4f6;
+  --surface: #ffffff;
+  --surface-2: #eaecf0;
+  --surface-card: #ffffff;
+  --surface-input: #ffffff;
+  --line: rgba(0, 0, 0, 0.09);
+  --line-strong: rgba(0, 0, 0, 0.16);
+  --muted: #64748b;
+  --text: #1e293b;
+  --titlebar-bg: #e2e4ea;
+  --toolbar-bg: #ebeef3;
+  --tab-active-bg: #ffffff;
+  --tab-active-color: #0f172a;
+  --tab-hover-bg: rgba(0, 0, 0, 0.05);
+  --address-bg: #ffffff;
+  --address-text: #0f172a;
+  --address-placeholder: #94a3b8;
+  --symbol-dark: #c5c2d3;
+}
+
+body.light-mode .wordmark {
+  color: var(--text);
+}
+body.light-mode .brand-wordmark {
+  color: var(--text);
+}
+body.light-mode .home-search {
+  background: #ffffff;
+  border-color: var(--line-strong);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+body.light-mode .home-search input {
+  color: var(--text);
+}
+body.light-mode .widget-card {
+  background: #ffffff;
+  border-color: var(--line);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+}
+body.light-mode .widget-card:hover {
+  border-color: var(--purple);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+}
+body.light-mode .settings-card {
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+body.light-mode .settings-nav button {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: var(--line);
+  color: var(--muted);
+}
+body.light-mode .settings-nav button:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text);
+}
+body.light-mode .clock-row {
+  border-bottom-color: var(--line);
+}
+body.light-mode .theme-mode-btn:hover:not(.active) {
+  background: rgba(0, 0, 0, 0.05);
 }

@@ -1,9 +1,11 @@
 'use strict';
 
+const { parseShortcut, matchesShortcut } = require('./preferences.cjs');
+
 // Native insertion preserves selections, Unicode, and Chromium input events.
 class ClipboardTyping {
-  constructor({ readText, canType, notify, random = Math.random, getSpeed = () => 1 }) {
-    Object.assign(this, { readText, canType, notify, random, getSpeed });
+  constructor({ readText, canType, notify, random = Math.random, getSpeed = () => 1, getShortcut = () => 'Ctrl+9' }) {
+    Object.assign(this, { readText, canType, notify, random, getSpeed, getShortcut });
     this.run = null;
     this.segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
   }
@@ -43,35 +45,20 @@ class ClipboardTyping {
       if (this.run !== run) return;
       if (!this.canType(wc)) { this.stop(); return; }
       const next = run.next;
-      if (next.done) { this.stop(); return; }
+      if (next.done) { this.stop(); this.notify('Finished typing clipboard text.'); return; }
+      const segment = next.value.segment;
+      run.next = run.characters.next();
       try {
-        const segment = next.value.segment;
-        if (typeof wc.executeJavaScript === 'function') {
-          void wc.executeJavaScript(`(() => {
-            try {
-              let el = document.activeElement;
-              while (el && el.contentDocument && el.contentDocument.activeElement) {
-                el = el.contentDocument.activeElement;
-              }
-              if (!el) el = document.body;
-              const ch = ${JSON.stringify(segment)};
-              const code = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ? ('Key' + ch.toUpperCase()) : (ch >= '0' && ch <= '9' ? ('Digit' + ch) : (ch === '\\n' ? 'Enter' : ''));
-              const keyCode = ch === '\\n' ? 13 : ch.charCodeAt(0);
-              const opts = { key: ch === '\\n' ? 'Enter' : ch, code, keyCode, which: keyCode, charCode: ch === '\\n' ? 13 : ch.charCodeAt(0), bubbles: true, cancelable: true, composed: true };
-              for (const type of ['keydown', 'keypress', 'keyup']) {
-                const ev = new KeyboardEvent(type, opts);
-                try { Object.defineProperty(ev, 'isTrusted', { value: true, configurable: true }); } catch {}
-                try { ev.__prism_allowed__ = true; } catch {}
-                el.dispatchEvent(ev);
-              }
-            } catch {}
-          })()`, true).catch(() => {});
+        if (segment === '\n') {
+          // Emulate a standard Enter keypress so Enter works uniformly across code editors and forms.
+          await wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+          await wc.sendInputEvent({ type: 'char', keyCode: '\r' });
+          await wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+        } else {
+          await wc.insertText(segment);
         }
-        // Line breaks are text, never Enter, so typing cannot submit a form.
-        await wc.insertText(segment);
         if (this.run === run) {
-          run.next = run.characters.next();
-          if (run.next.done) this.stop();
+          if (run.next.done) { this.stop(); this.notify('Finished typing clipboard text.'); }
           else run.timer = setTimeout(step, this.delay(segment));
         }
       } catch {
@@ -84,9 +71,10 @@ class ClipboardTyping {
   attach(wc) {
     wc.on('before-input-event', (event, input) => {
       if (input.type !== 'keyDown') return;
-      const shortcut = (process.platform === 'darwin' ? input.meta : input.control)
-        && !input.alt && !input.shift && (input.key === '9' || input.code === 'Digit9');
-      if (shortcut) {
+      const shortcutStr = this.getShortcut ? this.getShortcut() : 'Ctrl+9';
+      const parsed = parseShortcut(shortcutStr);
+      const isShortcut = matchesShortcut(parsed, input);
+      if (isShortcut) {
         event.preventDefault();
         if (!input.isAutoRepeat) void this.toggle(wc);
       } else if (!['Control', 'Meta', 'Shift', 'Alt'].includes(input.key) && this.run) {

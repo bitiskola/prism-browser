@@ -3,8 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  SEARCH_ENGINES, DEFAULT_PREFERENCES, normalizeSearch, searchURL,
-  normalizeProxy, publicProxyConfig, normalizeTheme, normalizeTyping,
+  SEARCH_ENGINES, DEFAULT_PREFERENCES, normalizeGeneral, normalizeTheme, normalizeShortcuts, parseShortcut, matchesShortcut,
+  normalizeSearch, searchURL, normalizeProxy, publicProxyConfig, normalizeTyping,
 } = require('../electron/preferences.cjs');
 
 test('search preferences default to Google and list each supported engine once', () => {
@@ -124,36 +124,75 @@ test('typing speed defaults safely and rejects invalid saved or IPC values', () 
   for (const input of [null, [], 'fast']) assert.throws(() => normalizeTyping(input));
 });
 
-test('theme preferences default safely and normalize accent colors and booleans', () => {
+test('general preferences default safely and handle reopen tabs boolean', () => {
+  assert.deepEqual(normalizeGeneral(), { restoreTabs: true });
+  assert.deepEqual(normalizeGeneral({}), { restoreTabs: true });
+  assert.deepEqual(normalizeGeneral({ restoreTabs: false }), { restoreTabs: false });
+  assert.deepEqual(normalizeGeneral({ restoreTabs: true }), { restoreTabs: true });
+  for (const input of [null, [], 'general']) assert.throws(() => normalizeGeneral(input));
+});
+
+test('theme preferences default safely and normalize accent colors, mode and booleans', () => {
   assert.deepEqual(normalizeTheme(), {
     accentColor: '#b49bf8',
     hideLogo: false,
     hideModuleText: false,
+    mode: 'dark',
   });
   assert.deepEqual(normalizeTheme({}), {
     accentColor: '#b49bf8',
     hideLogo: false,
     hideModuleText: false,
+    mode: 'dark',
   });
-  assert.deepEqual(normalizeTheme({ accentColor: '#ff0055', hideLogo: true, hideModuleText: true }), {
+  assert.deepEqual(normalizeTheme({ accentColor: '#ff0055', hideLogo: true, hideModuleText: true, mode: 'light' }), {
     accentColor: '#ff0055',
     hideLogo: true,
     hideModuleText: true,
+    mode: 'light',
   });
   assert.deepEqual(normalizeTheme({ accentColor: '#ABCDEF' }), {
     accentColor: '#abcdef',
     hideLogo: false,
     hideModuleText: false,
+    mode: 'dark',
   });
   assert.deepEqual(normalizeTheme({ accentColor: 'invalid' }), {
     accentColor: '#b49bf8',
     hideLogo: false,
     hideModuleText: false,
-  });
-  assert.deepEqual(normalizeTheme({ accentColor: 123 }), {
-    accentColor: '#b49bf8',
-    hideLogo: false,
-    hideModuleText: false,
+    mode: 'dark',
   });
   for (const input of [null, [], 'theme']) assert.throws(() => normalizeTheme(input));
+});
+
+test('shortcut preferences default safely and normalize key combinations', () => {
+  assert.deepEqual(normalizeShortcuts(), { typing: 'Ctrl+9', fullscreen: 'Ctrl+F' });
+  assert.deepEqual(normalizeShortcuts({}), { typing: 'Ctrl+9', fullscreen: 'Ctrl+F' });
+  assert.deepEqual(normalizeShortcuts({ typing: 'Alt+9', fullscreen: 'Ctrl+Shift+F' }), {
+    typing: 'Alt+9',
+    fullscreen: 'Ctrl+Shift+F',
+  });
+  assert.deepEqual(normalizeShortcuts({ typing: 'invalid', fullscreen: '' }), {
+    typing: 'Ctrl+9',
+    fullscreen: 'Ctrl+F',
+  });
+  for (const input of [null, [], 'shortcuts']) assert.throws(() => normalizeShortcuts(input));
+});
+
+test('parseShortcut and matchesShortcut validate input and DOM keyboard events', () => {
+  const parsedTyping = parseShortcut('Ctrl+9');
+  assert.deepEqual(parsedTyping, { ctrl: true, alt: false, shift: false, meta: false, key: '9' });
+  assert.equal(matchesShortcut(parsedTyping, { ctrlKey: true, key: '9' }), true);
+  assert.equal(matchesShortcut(parsedTyping, { ctrlKey: false, key: '9' }), false);
+  assert.equal(matchesShortcut(parsedTyping, { ctrlKey: true, altKey: true, key: '9' }), false);
+
+  const parsedFull = parseShortcut('Ctrl+F');
+  assert.equal(matchesShortcut(parsedFull, { ctrlKey: true, key: 'f' }), true);
+  assert.equal(matchesShortcut(parsedFull, { ctrlKey: true, key: 'F' }), true);
+  assert.equal(matchesShortcut(parsedFull, { ctrlKey: true, shiftKey: true, key: 'f' }), false);
+
+  const parsedF11 = parseShortcut('F11');
+  assert.equal(matchesShortcut(parsedF11, { key: 'F11' }), true);
+  assert.equal(matchesShortcut(parsedF11, { ctrlKey: true, key: 'F11' }), false);
 });

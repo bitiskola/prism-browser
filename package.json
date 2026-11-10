@@ -1,7 +1,7 @@
 {
   "name": "prism-browser",
   "productName": "Prism Browser",
-  "version": "1.4.17",
+  "version": "1.4.18",
   "desktopName": "prism-browser.desktop",
   "description": "A personal sandbox browser with search, proxy, Adblock Plus filtering and scoped page tools",
   "main": "electron/main.cjs",
