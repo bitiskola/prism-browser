@@ -790,7 +790,7 @@ bridge.on('network-cleared',()=>{entries=[];selectedEntry=null;state.networkCoun
 bridge.on('network-status',status=>{if(status?.tabId)captureStatus.set(status.tabId,status);if(pane==='network')renderNetwork();});
 bridge.on('find-result',result=>{if(!$('#find-bar').hidden)$('#find-input').setAttribute('title',`${result?.activeMatchOrdinal||0} of ${result?.matches||0} matches`);});
 bridge.on('screenshare-request',data=>showScreenshareModal(data));
-bridge.on('fullscreen-change',isFull=>{document.body.classList.toggle('fullscreen-mode',Boolean(isFull));requestViewport();});
+bridge.on('fullscreen-change',isFull=>{document.body.classList.toggle('fullscreen-mode',Boolean(isFull));lastBounds='';requestViewport();setTimeout(requestViewport,100);setTimeout(requestViewport,300);setTimeout(requestViewport,600);});
 bridge.on('shortcut',command=>{const action=typeof command==='string'?command:command?.action;if(action==='address'){$('#address').focus();$('#address').select();}if(action==='find')openFind();if(action==='prepare-new-tab-search')prepareNewTabSearch();if(action==='new-tab-search')focusNewTabSearch(command?.tabId||state.activeTabId);});
 
 function initWidgets() {

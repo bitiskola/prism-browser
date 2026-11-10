@@ -390,6 +390,17 @@ function checkTabSpoof(url) {
 function sendState() { clearTimeout(stateTimer); stateTimer = null; emit('state', snapshot()); }
 function scheduleState() { if (!stateTimer) stateTimer = setTimeout(() => { stateTimer = null; sendState(); }, 100); }
 
+function exitHtmlFullScreen() {
+  for (const tab of tabs.values()) {
+    tab.isHtmlFullScreen = false;
+    if (tab.view && !tab.view.webContents.isDestroyed()) {
+      tab.view.webContents.executeJavaScript(
+        "try { if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); } else if (document.webkitFullscreenElement) { document.webkitExitFullscreen().catch(() => {}); } } catch {} void 0;"
+      ).catch(() => {});
+    }
+  }
+}
+
 function updateFullscreenState() {
   const active = tabs.get(activeTabId);
   const isFull = Boolean((win && !win.isDestroyed() && win.isFullScreen()) || active?.isHtmlFullScreen);
@@ -398,28 +409,17 @@ function updateFullscreenState() {
   scheduleState();
   setTimeout(layout, 50);
   setTimeout(layout, 150);
+  setTimeout(layout, 300);
+  setTimeout(layout, 600);
 }
 
-let lastNormalContentSize = null;
 let lastBroadcastScale = null;
 
 function layout() {
   if (!win || win.isDestroyed()) return;
-  let [width, height] = win.getContentSize();
+  const [width, height] = win.getContentSize();
   const active = tabs.get(activeTabId);
   const isWindowFull = win.isFullScreen();
-  const targetRes = getFullscreenResolution();
-  const targetW = targetRes?.width || 1920;
-  const targetH = targetRes?.height || 1080;
-
-  if (!isWindowFull) {
-    if (lastNormalContentSize && width === targetW && height === targetH) {
-      width = lastNormalContentSize[0];
-      height = lastNormalContentSize[1];
-    } else if (width !== targetW || height !== targetH) {
-      lastNormalContentSize = [width, height];
-    }
-  }
   for (const tab of tabs.values()) {
     const isShared = (tab.id === sharedTabId);
     const show = viewport.visible && ((tab.id === activeTabId && tab.url !== 'about:blank' && !tab.error) || isShared);
@@ -430,10 +430,12 @@ function layout() {
       if (isFull) {
         bounds = { x: 0, y: 0, width, height };
       } else {
-        const availX = Math.max(0, Math.min(width, Math.round(viewport.x)));
-        const availY = Math.max(0, Math.min(height, Math.round(viewport.y)));
-        const availW = Math.max(0, Math.min(width - availX, Math.round(viewport.width)));
-        const availH = Math.max(0, Math.min(height - availY, Math.round(viewport.height)));
+        const availX = Math.max(0, Math.round(viewport.x));
+        const availY = Math.max(0, Math.round(viewport.y));
+        const maxAvailW = width > availX ? width - availX : Math.round(viewport.width);
+        const maxAvailH = height > availY ? height - availY : Math.round(viewport.height);
+        const availW = Math.max(0, Math.min(maxAvailW, Math.round(viewport.width)));
+        const availH = Math.max(0, Math.min(maxAvailH, Math.round(viewport.height)));
         const shouldFitAspect = Boolean(tab.spoofOnLoad && data.spoof?.fullscreen !== false);
         if (shouldFitAspect) {
           const targetRes = getFullscreenResolution();
@@ -566,6 +568,7 @@ async function createTab(url = 'about:blank', activate = true) {
   wc.on('leave-html-full-screen', () => {
     tab.isHtmlFullScreen = false;
     if (win && !win.isDestroyed() && win.isFullScreen() && ![...tabs.values()].some(t => t.isHtmlFullScreen)) {
+      exitHtmlFullScreen();
       win.setFullScreen(false);
     }
     updateFullscreenState();
@@ -589,11 +592,14 @@ async function createTab(url = 'about:blank', activate = true) {
     const key = input.key.toLowerCase(), mod = input.control || input.meta;
     if (key === 'f11' || (mod && key === 'f')) {
       event.preventDefault();
-      win.setFullScreen(!win.isFullScreen());
+      const willBeFull = !win.isFullScreen();
+      if (!willBeFull) exitHtmlFullScreen();
+      win.setFullScreen(willBeFull);
       return;
     }
     if (key === 'escape' && win.isFullScreen()) {
       event.preventDefault();
+      exitHtmlFullScreen();
       win.setFullScreen(false);
       return;
     }
@@ -1225,7 +1231,9 @@ async function action(name, payload = {}) {
     case 'window-maximize': win.isMaximized() ? win.unmaximize() : win.maximize(); break;
     case 'window-fullscreen-toggle': {
       if (win && !win.isDestroyed()) {
-        win.setFullScreen(!win.isFullScreen());
+        const willBeFull = !win.isFullScreen();
+        if (!willBeFull) exitHtmlFullScreen();
+        win.setFullScreen(willBeFull);
         return { ok: true, isFullScreen: win.isFullScreen() };
       }
       return { ok: false };
@@ -1233,6 +1241,7 @@ async function action(name, payload = {}) {
     case 'window-fullscreen-exit': {
       if (win && !win.isDestroyed()) {
         if (win.isFullScreen()) {
+          exitHtmlFullScreen();
           win.setFullScreen(false);
         }
         return { ok: true, isFullScreen: win.isFullScreen() };
@@ -1275,13 +1284,11 @@ async function createWindow() {
     updateFullscreenState();
   });
   win.on('leave-full-screen', () => {
-    const active = tabs.get(activeTabId);
-    if (active) active.isHtmlFullScreen = false;
+    exitHtmlFullScreen();
     updateFullscreenState();
   });
   win.on('leave-html-full-screen', () => {
-    const active = tabs.get(activeTabId);
-    if (active) active.isHtmlFullScreen = false;
+    exitHtmlFullScreen();
     updateFullscreenState();
   });
   win.webContents.on('before-input-event', (event, input) => {
@@ -1289,11 +1296,14 @@ async function createWindow() {
     const key = input.key.toLowerCase(), mod = input.control || input.meta;
     if (key === 'f11' || (mod && key === 'f')) {
       event.preventDefault();
-      win.setFullScreen(!win.isFullScreen());
+      const willBeFull = !win.isFullScreen();
+      if (!willBeFull) exitHtmlFullScreen();
+      win.setFullScreen(willBeFull);
       return;
     }
     if (key === 'escape' && win.isFullScreen()) {
       event.preventDefault();
+      exitHtmlFullScreen();
       win.setFullScreen(false);
       return;
     }
@@ -1324,6 +1334,7 @@ app.on('web-contents-created', (_event, contents) => {
     const active = tabs.get(activeTabId);
     if (active) active.isHtmlFullScreen = false;
     if (win && !win.isDestroyed() && win.isFullScreen() && ![...tabs.values()].some(t => t.isHtmlFullScreen)) {
+      exitHtmlFullScreen();
       win.setFullScreen(false);
     }
     updateFullscreenState();

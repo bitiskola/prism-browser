@@ -200,3 +200,59 @@ test('shortcut logic: Ctrl+F toggles fullscreen, Escape exits only when fullscre
   assert.equal(res.handled, false);
   assert.equal(fullScreen, false);
 });
+
+test('exiting window fullscreen triggers HTML5 exit fullscreen on tabs and does not clamp viewport', () => {
+  const exitedTabs = [];
+  const tabs = new Map([
+    ['tab-1', {
+      id: 'tab-1',
+      isHtmlFullScreen: true,
+      view: {
+        webContents: {
+          isDestroyed: () => false,
+          executeJavaScript: async (code) => {
+            exitedTabs.push({ id: 'tab-1', code });
+            return Promise.resolve();
+          }
+        }
+      }
+    }]
+  ]);
+
+  function exitHtmlFullScreen() {
+    for (const tab of tabs.values()) {
+      tab.isHtmlFullScreen = false;
+      if (tab.view && !tab.view.webContents.isDestroyed()) {
+        tab.view.webContents.executeJavaScript(
+          "try { if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); } else if (document.webkitFullscreenElement) { document.webkitExitFullscreen().catch(() => {}); } } catch {} void 0;"
+        ).catch(() => {});
+      }
+    }
+  }
+
+  // Before exiting fullscreen
+  assert.equal(tabs.get('tab-1').isHtmlFullScreen, true);
+
+  // Trigger exit
+  exitHtmlFullScreen();
+
+  assert.equal(tabs.get('tab-1').isHtmlFullScreen, false);
+  assert.equal(exitedTabs.length, 1);
+  assert.match(exitedTabs[0].code, /document\.exitFullscreen/);
+
+  // Layout calculation does not clamp viewport width with a stale normal content size
+  function computeAvail(width, height, viewport) {
+    const availX = Math.max(0, Math.round(viewport.x));
+    const availY = Math.max(0, Math.round(viewport.y));
+    const maxAvailW = width > availX ? width - availX : Math.round(viewport.width);
+    const maxAvailH = height > availY ? height - availY : Math.round(viewport.height);
+    const availW = Math.max(0, Math.min(maxAvailW, Math.round(viewport.width)));
+    const availH = Math.max(0, Math.min(maxAvailH, Math.round(viewport.height)));
+    return { availX, availY, availW, availH };
+  }
+
+  // Maximize / un-fullscreen settled state: window content width 1918, viewport x=58, width=1860
+  const avail = computeAvail(1918, 1153, { x: 58, y: 108, width: 1860, height: 1045 });
+  assert.equal(avail.availW, 1860, 'full viewport width 1860 must be available without 89px gap');
+  assert.equal(avail.availH, 1045);
+});
