@@ -97,10 +97,6 @@ function getFullscreenResolution() {
   return { width: 1920, height: 1080 };
 }
 
-let cursorTrackingTimer = null;
-let lastStuckState = false;
-let lastSharedInside = true;
-let pendingOverlayReset = false;
 // The page (or iframe) that called getDisplayMedia for the current tab share.
 // Its screencast transformer reads the crop scale and the resize hold.
 let castRequestFrame = null;
@@ -131,94 +127,76 @@ function tabCssPerDip(tab) {
   return 1 / (scale * zoom);
 }
 
-function startCursorTracking() {
-  if (cursorTrackingTimer) return;
-  cursorTrackingTimer = setInterval(() => {
-    try {
-      if (!win || win.isDestroyed() || !win.isVisible()) return;
+// Shared-tab pointer tracking, driven by the tab's own native mouse events
+// (before-mouse-event sees the mouseLeave Chromium forwards when the pointer
+// exits the view). Polling screen.getCursorScreenPoint() does not work on
+// Wayland: outside the app's windows it keeps returning the last in-window
+// position, so leaving the tab was never noticed, and after a fullscreen
+// toggle that stale point could pin the parked cursor in place.
+function sharedCursorEnabled(tab) {
+  return Boolean(tab && tab.spoofOnLoad && tab.url !== 'about:blank' && data.spoof?.screenshareCursor !== false);
+}
 
-      const cursorPoint = screen.getCursorScreenPoint();
-      const contentBounds = win.getContentBounds();
+function sendSharedCursorStuck(tab, stuck, mouse = null) {
+  if (!sharedCursorEnabled(tab) || tab.view.webContents.isDestroyed()) return;
+  const cssPerDip = tabCssPerDip(tab);
+  // before-mouse-event positions are view DIPs; the page works in CSS px.
+  const coord = value => (typeof value === 'number' && Number.isFinite(value) ? Math.round(value * cssPerDip) : 'null');
+  tab.view.webContents.executeJavaScript(
+    'try { window.__prism_set_cursor_stuck?.(' + stuck + ', ' + coord(mouse?.x) + ', ' + coord(mouse?.y) + ', ' + JSON.stringify(currentSystemCursor()) + ', ' + cssPerDip + '); } catch {} void 0;'
+  ).catch(() => {});
+}
 
-      // Tab screensharing: remove the real pointer from the capture as soon as it leaves the shared view.
-      const sharedTab = sharedTabId ? tabs.get(sharedTabId) : null;
-      if (sharedTab && sharedTab.view && !sharedTab.view.webContents.isDestroyed()) {
-        const sBounds = sharedTab.view.getBounds();
-        const isSharedInside = (
-          cursorPoint.x >= contentBounds.x + sBounds.x &&
-          cursorPoint.x < contentBounds.x + sBounds.x + sBounds.width &&
-          cursorPoint.y >= contentBounds.y + sBounds.y &&
-          cursorPoint.y < contentBounds.y + sBounds.y + sBounds.height &&
-          win.isFocused()
-        );
-        if (!isSharedInside) {
-          if (lastSharedInside) {
-            lastSharedInside = false;
-            pendingOverlayReset = true;
-          }
-          if (pendingOverlayReset && resetCaptureCursorOverlay(sharedTab, {
-            windowFocused: win.isFocused(),
-            focusSpoofed: Boolean(sharedTab.spoofOnLoad && data.spoof?.focusVisibility !== false)
-          })) pendingOverlayReset = false;
-        } else {
-          lastSharedInside = true;
-          pendingOverlayReset = false;
-        }
-      } else {
-        lastSharedInside = true;
-        pendingOverlayReset = false;
-      }
+// Tells the shared page which pointer images and scale to use, and whether to
+// draw the pointer itself. Chromium positions its captured pointer relative to
+// the view, while under the fullscreen lock the captured surface is the larger
+// emulated screen, so outside real fullscreen the captured pointer is
+// misplaced. The page then hides the OS pointer (removing it from the capture)
+// and draws one in the right place.
+function pushSharedCursorConfig() {
+  const tab = sharedTabId ? tabs.get(sharedTabId) : null;
+  if (!tab || tab.view.webContents.isDestroyed() || !sharedCursorEnabled(tab)) return;
+  let scale = 1;
+  if (data.spoof?.fullscreen !== false && focus?.computeScale) scale = focus.computeScale(tab.id, getFullscreenResolution()) || 1;
+  const config = { cursor: currentSystemCursor(), cssPerDip: tabCssPerDip(tab), live: scale < 0.999 };
+  tab.view.webContents.executeJavaScript(
+    `try { window.__prism_tab_scale = ${scale}; window.__prism_cast_cursor_update?.(${JSON.stringify(config)}); } catch {} void 0;`
+  ).catch(() => {});
+}
 
-      const optCursor = data.spoof?.screenshareCursor !== false;
-      let targetTab = null;
-      if (optCursor && sharedTabId && tabs.has(sharedTabId)) {
-        const candidate = tabs.get(sharedTabId);
-        if (candidate && candidate.spoofOnLoad && candidate.url !== 'about:blank') {
-          targetTab = candidate;
-        }
-      }
+function trySharedOverlayReset(tab) {
+  if (!tab.pendingOverlayReset || tab.id !== sharedTabId || !win || win.isDestroyed()) return;
+  if (resetCaptureCursorOverlay(tab, {
+    windowFocused: win.isFocused(),
+    focusSpoofed: Boolean(tab.spoofOnLoad && data.spoof?.focusVisibility !== false)
+  })) tab.pendingOverlayReset = false;
+}
 
-      if (!targetTab || !targetTab.view || targetTab.view.webContents.isDestroyed()) {
-        if (lastStuckState) {
-          lastStuckState = false;
-          for (const tab of tabs.values()) {
-            if (tab.view && !tab.view.webContents.isDestroyed()) {
-              tab.view.webContents.executeJavaScript('try { window.__prism_set_cursor_stuck?.(false); } catch {} void 0;').catch(() => {});
-            }
-          }
-        }
-        return;
-      }
+function onSharedTabMouse(tab, mouse) {
+  if (!mouse || tab.id !== sharedTabId) return;
+  if (mouse.type === 'mouseLeave') {
+    if (tab.pointerOutside) return;
+    tab.pointerOutside = true;
+    tab.pendingOverlayReset = true;
+    // Let Chromium finish dispatching the exit before touching the view.
+    setImmediate(() => trySharedOverlayReset(tab));
+    sendSharedCursorStuck(tab, true, mouse);
+    return;
+  }
+  if (mouse.type === 'mouseUp' && tab.pendingOverlayReset) setImmediate(() => trySharedOverlayReset(tab));
+  if (!tab.pointerOutside || mouse.type === 'mouseUp') return;
+  // A drag that left the view keeps sending moves from outside it.
+  const b = tab.view.getBounds();
+  if (!(mouse.x >= 0 && mouse.y >= 0 && mouse.x < b.width && mouse.y < b.height)) return;
+  tab.pointerOutside = false;
+  tab.pendingOverlayReset = false;
+  sendSharedCursorStuck(tab, false);
+}
 
-      const viewBounds = targetTab.view.getBounds();
-      const viewScreenRect = {
-        x: contentBounds.x + viewBounds.x,
-        y: contentBounds.y + viewBounds.y,
-        width: viewBounds.width,
-        height: viewBounds.height
-      };
-
-      const isInside = (
-        cursorPoint.x >= viewScreenRect.x &&
-        cursorPoint.x < viewScreenRect.x + viewScreenRect.width &&
-        cursorPoint.y >= viewScreenRect.y &&
-        cursorPoint.y < viewScreenRect.y + viewScreenRect.height &&
-        win.isFocused()
-      );
-
-      const isOutside = !isInside;
-      if (isOutside !== lastStuckState) {
-        lastStuckState = isOutside;
-        const cssPerDip = tabCssPerDip(targetTab);
-        const relX = Math.round((cursorPoint.x - viewScreenRect.x) * cssPerDip);
-        const relY = Math.round((cursorPoint.y - viewScreenRect.y) * cssPerDip);
-        const sysCursor = currentSystemCursor();
-        targetTab.view.webContents.executeJavaScript(
-          'try { window.__prism_set_cursor_stuck?.(' + isOutside + ', ' + relX + ', ' + relY + ', ' + JSON.stringify(sysCursor) + ', ' + cssPerDip + '); } catch {} void 0;'
-        ).catch(() => {});
-      }
-    } catch {}
-  }, 25);
+function resetSharedPointerState(tab) {
+  if (!tab) return;
+  tab.pointerOutside = false;
+  tab.pendingOverlayReset = false;
 }
 
 // Runs a small script in the page/frame that requested the current tab share,
@@ -270,12 +248,6 @@ function applyTabBounds(tab, bounds) {
   if (fullscreenLocked) focus.updateMetrics(tab.id);
 }
 
-function stopCursorTracking() {
-  if (cursorTrackingTimer) {
-    clearInterval(cursorTrackingTimer);
-    cursorTrackingTimer = null;
-  }
-}
 
 const focus = new FocusController({ getRules: () => data.rules,
   getTargetResolution: () => getFullscreenResolution(),
@@ -295,12 +267,18 @@ const focus = new FocusController({ getRules: () => data.rules,
         lastBroadcastScale = effectiveScale;
         broadcastTabScale(effectiveScale);
       }
+      pushSharedCursorConfig();
     }
   },
   getSpoofOptions: () => data.spoof,
   getFrameSessions: id => monitor.getFrameSessions(id),
   onError: (error, id) => { const tab = tabs.get(id); if (tab) { tab.focusError = error.message; scheduleState(); } },
-  onStatus: (status, id) => { const tab = tabs.get(id); if (tab) { tab.focusStatus = status; tab.focusError = status.error || ''; scheduleState(); } }
+  onStatus: (status, id) => {
+    const tab = tabs.get(id);
+    if (tab) { tab.focusStatus = status; tab.focusError = status.error || ''; scheduleState(); }
+    // A (re)installed page script starts without the share's cursor settings.
+    if (id === sharedTabId && status.status === 'active') pushSharedCursorConfig();
+  }
 });
 app.on('second-instance', () => { if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.focus(); } });
 
@@ -534,6 +512,7 @@ async function createTab(url = 'about:blank', activate = true) {
   const update = () => { scheduleState(); scheduleSave(); };
   // Tracks held buttons so the capture-cursor reset never cancels a drag.
   wc.on('before-mouse-event', (_event, mouse) => {
+    onSharedTabMouse(tab, mouse);
     if (mouse?.type === 'mouseDown') tab.mouseButtonDown = true;
     else if (mouse?.type === 'mouseUp') tab.mouseButtonDown = false;
     else if (mouse?.type === 'mouseMove' || mouse?.type === 'mouseLeave') {
@@ -886,12 +865,11 @@ async function configureSession() {
           castRequestFrame = requestingFrame || null;
           castRequestTabId = requestingTab?.id ?? null;
           castRequestSpoofed = Boolean(isSpoofActive);
-          lastSharedInside = true;
-          pendingOverlayReset = false;
           // Pick up cursor theme/size changes made since the last share.
           currentSystemCursor(true);
           layout();
           const chosen = availableTabs.find(t => t.id === selection.id);
+          resetSharedPointerState(chosen);
           const isChosenSpoofed = Boolean(chosen && chosen.spoofOnLoad && data.spoof?.fullscreen !== false);
           if (isChosenSpoofed && focus && typeof focus.updateMetrics === 'function') {
             focus.updateMetrics(selection.id);
@@ -914,12 +892,18 @@ async function configureSession() {
             }
           };
           setCastState(true);
+          pushSharedCursorConfig();
+          // The page script carries "this tab is shared" for documents loaded
+          // during the share; refresh it now and again when the share ends.
+          if (chosen?.spoofOnLoad) void focus.refresh(chosen.id).catch(() => {});
+          const listeners = [];
+          const listen = (wc, name, handler) => { wc.on(name, handler); listeners.push([wc, name, handler]); };
           const cleanup = () => {
+            for (const [wc, name, handler] of listeners.splice(0)) { if (!wc.isDestroyed()) wc.removeListener(name, handler); }
             if (sharedTabId === selection.id) {
               const endedSharedId = sharedTabId;
               sharedTabId = null;
-              lastSharedInside = true;
-              pendingOverlayReset = false;
+              resetSharedPointerState(tabs.get(endedSharedId));
               setCastState(false);
               const resetScript = `try { window.__prism_tab_scale = 1; window.__prism_tab_cast_active = false; window.dispatchEvent(new CustomEvent('__prism_tab_scale_change__', { detail: { scale: 1 } })); window.dispatchEvent(new CustomEvent('__prism_tab_cast_change__', { detail: { active: false } })); } catch {} void 0;`;
               for (const tab of tabs.values()) {
@@ -936,22 +920,26 @@ async function configureSession() {
               if (endedTab?.spoofOnLoad && data.spoof?.fullscreen !== false && focus && typeof focus.updateMetrics === 'function') {
                 focus.updateMetrics(endedSharedId);
               }
+              if (endedTab?.spoofOnLoad) void focus.refresh(endedSharedId).catch(() => {});
             }
           };
+          // A tab capture follows the shared tab across its own navigations, so
+          // only its destruction ends the share. Previously any navigation
+          // event, including iframe and same-document ones, dropped the share
+          // state while the stream kept running.
           if (chosen && !chosen.view.webContents.isDestroyed()) {
-            chosen.view.webContents.once('destroyed', cleanup);
-            chosen.view.webContents.once('did-start-navigation', cleanup);
+            listen(chosen.view.webContents, 'destroyed', cleanup);
           }
           if (requestingTab && !requestingTab.view.webContents.isDestroyed()) {
-            requestingTab.view.webContents.once('destroyed', cleanup);
-            requestingTab.view.webContents.once('did-start-navigation', cleanup);
-            const onConsole = (_ev, _lvl, msg) => {
-              if (msg === '__prism_screenshare_ended__') {
-                cleanup();
-                requestingTab?.view?.webContents?.removeListener('console-message', onConsole);
-              }
-            };
-            requestingTab.view.webContents.on('console-message', onConsole);
+            const requesterWc = requestingTab.view.webContents;
+            listen(requesterWc, 'destroyed', cleanup);
+            // Only a new top-level document in the requester ends its stream.
+            listen(requesterWc, 'did-start-navigation', details => {
+              if (details?.isMainFrame && !details?.isSameDocument) cleanup();
+            });
+            listen(requesterWc, 'console-message', (details, _lvl, msg) => {
+              if ((details?.message ?? msg) === '__prism_screenshare_ended__') cleanup();
+            });
           }
           toast(`Sharing tab "${chosen?.title || 'Tab'}" with ${requestingOrigin || 'site'}.`);
         } else if (selection.type === 'screen') {
@@ -1189,7 +1177,7 @@ async function action(name, payload = {}) {
     case 'download-show': { const entry = downloads.get(payload.id); if (entry?.path && entry.state === 'completed') shell.showItemInFolder(entry.path); break; }
     case 'find': if (wc && typeof payload.text === 'string' && payload.text.trim()) return wc.findInPage(payload.text.slice(0, 1000), { forward: payload.forward !== false, findNext: true }); wc?.stopFindInPage('clearSelection'); return { ok: true };
     case 'find-stop': wc?.stopFindInPage('clearSelection'); break;
-    case 'zoom': if (wc) wc.setZoomFactor(Math.max(0.5, Math.min(3, wc.getZoomFactor() + (Number(payload.delta) || 0)))); break;
+    case 'zoom': if (wc) { wc.setZoomFactor(Math.max(0.5, Math.min(3, wc.getZoomFactor() + (Number(payload.delta) || 0)))); if (tab?.id === sharedTabId) pushSharedCursorConfig(); } break;
     case 'devtools': if (wc) {
       tab.devtoolsRequested = true; sendState();
       await focus.detach(tab.id); monitor.detach(tab.id);
@@ -1241,7 +1229,6 @@ async function createWindow() {
   win.on('blur', () => clipboardTyping.stop());
   win.on('close', () => clipboardTyping.stop());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  startCursorTracking();
   win.on('resize', layout);
   win.on('enter-full-screen', () => {
     const active = tabs.get(activeTabId);
@@ -1278,7 +1265,7 @@ async function createWindow() {
     }
   });
   win.on('close', () => { saveState(); closing = true; clearTimeout(saveTimer); });
-  win.on('closed', () => { if (pendingScreenshare) { pendingScreenshare.callback(null); pendingScreenshare = null; } sharedTabId = null; closeFaviconDecoder(); for (const tab of tabs.values()) { monitor.detach(tab.id); adblock?.detach(tab.view.webContents.id); void focus.detach(tab.id); if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close(); } stopCursorTracking(); tabs.clear(); win = null; });
+  win.on('closed', () => { if (pendingScreenshare) { pendingScreenshare.callback(null); pendingScreenshare = null; } sharedTabId = null; closeFaviconDecoder(); for (const tab of tabs.values()) { monitor.detach(tab.id); adblock?.detach(tab.view.webContents.id); void focus.detach(tab.id); if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close(); } tabs.clear(); win = null; });
   await win.loadFile(shellFile);
   const restore = !connectionError && data.tabs.length ? [...data.tabs] : ['about:blank'];
   const selected = data.activeIndex;

@@ -550,20 +550,20 @@ test('screenshare cursor containment parks pointer ~1cm from exit side, driven o
   f.doc('mouseout', {});
   assert.ok(!f.pointer() || f.pointer().style.display !== 'block', 'no parked pointer from in-page events');
 
-  // The main process reports the OS pointer left the view: park at the exit
-  // side, using the last real in-page position (x=1900 -> right edge).
+  // The main process reports the pointer left the view (from the tab's own
+  // mouseLeave): park ~1cm inside the edge the leave position crossed.
   window.__prism_set_cursor_stuck(true, 2050, 470);
   const pointerEl = f.pointer();
   assert.ok(pointerEl, 'pointer element exists inside host');
   assert.equal(pointerEl.style.display, 'block');
-  assert.equal(pointerEl.style.transform, 'translate3d(1882px, 450px, 0)');
+  assert.equal(pointerEl.style.transform, 'translate3d(1882px, 470px, 0)');
   assert.ok(pointerEl.innerHTML.includes('<svg'), 'falls back to an SVG arrow');
 
   // Moves while outside (drags, synthetic off-screen moves) do not move or hide it.
   f.win('mousemove', { clientX: -10000, clientY: -10000 });
   f.win('mousemove', { clientX: 2400, clientY: 500 });
   assert.equal(pointerEl.style.display, 'block');
-  assert.equal(pointerEl.style.transform, 'translate3d(1882px, 450px, 0)');
+  assert.equal(pointerEl.style.transform, 'translate3d(1882px, 470px, 0)');
 
   // Back inside: the main process clears it.
   window.__prism_set_cursor_stuck(false);
@@ -574,6 +574,19 @@ test('screenshare cursor containment parks pointer ~1cm from exit side, driven o
   window.__prism_set_cursor_stuck(true, 500, -20);
   assert.equal(pointerEl.style.transform, 'translate3d(500px, 38px, 0)');
 
+  // A fast flick out of the left side: the last in-page point was mid-screen
+  // (nearest edge: bottom), but the leave position shows the left edge.
+  window.__prism_set_cursor_stuck(false);
+  f.win('mousemove', { clientX: 500, clientY: 900 });
+  window.__prism_set_cursor_stuck(true, -15, 880);
+  assert.equal(pointerEl.style.transform, 'translate3d(38px, 880px, 0)');
+
+  // Without a leave position, the nearest edge to the last in-page point is used.
+  window.__prism_set_cursor_stuck(false);
+  f.win('mousemove', { clientX: 1900, clientY: 300 });
+  window.__prism_set_cursor_stuck(true);
+  assert.equal(pointerEl.style.transform, 'translate3d(1882px, 300px, 0)');
+
   // Stop tab cast: pointer hides immediately.
   f.win('__prism_tab_cast_change__', { detail: { active: false } });
   assert.equal(pointerEl.style.display, 'none');
@@ -581,6 +594,81 @@ test('screenshare cursor containment parks pointer ~1cm from exit side, driven o
   // Disabling spoof mode cleans up host from DOM
   vm.runInContext(buildFocusScript([]), context);
   assert.equal(f.appended.length, 0, 'cursor host removed on disable');
+});
+
+test('screenshare live cursor: outside real fullscreen the page hides the OS pointer and draws it in place', () => {
+  const rules = [{ host: 'exam.test', focus: true }];
+  const f = cursorFixture();
+  const { window } = f;
+  const textNode = { nodeType: 3, textContent: 'hello' };
+  f.document.caretRangeFromPoint = (x, y) => (y > 600 ? { startContainer: textNode } : null);
+  f.document.createRange = () => ({ selectNodeContents() {}, getClientRects: () => [{ left: 0, right: 1920, top: 600, bottom: 700 }] });
+  const element = (tag, extra = {}) => ({ nodeType: 1, tagName: tag, closest: () => null, ...extra });
+  const link = element('A', { closest: sel => (sel.includes('a[href]') ? {} : null) });
+  const field = element('INPUT', { closest: sel => (sel === 'input' ? { type: 'text' } : null) });
+  const cursor = {
+    dataUrl: 'data:image/png;base64,ARROW', width: 24, height: 24, xhot: 4, yhot: 4,
+    shapes: {
+      text: { dataUrl: 'data:image/png;base64,BEAM', width: 24, height: 24, xhot: 12, yhot: 12 },
+      pointer: { dataUrl: 'data:image/png;base64,HAND', width: 24, height: 24, xhot: 8, yhot: 2 },
+    }
+  };
+  const context = vm.createContext({ document: f.document, window, URL, DOMException });
+  vm.runInContext(buildFocusScript(rules, { screenshareCursor: true }), context);
+
+  // Live mode needs an active tab cast.
+  window.__prism_cast_cursor_update({ cursor, cssPerDip: 2, live: true });
+  f.win('mousemove', { clientX: 100, clientY: 100, target: element('DIV') });
+  assert.ok(!f.pointer() || f.pointer().style.display !== 'block', 'not drawn when not casting');
+
+  f.win('__prism_tab_cast_change__', { detail: { active: true } });
+  window.__prism_cast_cursor_update({ cursor, cssPerDip: 2, live: true });
+  const style = f.appended[0].children.find(c => c.tagName === 'STYLE');
+  assert.match(style.textContent, /cursor:none !important/, 'OS pointer hidden over the page');
+
+  f.win('mousemove', { clientX: 100, clientY: 120, target: element('DIV') });
+  const el = f.pointer();
+  assert.equal(el.style.display, 'block');
+  assert.equal(el.style.transform, 'translate3d(100px, 120px, 0)');
+  assert.ok(el.innerHTML.includes('ARROW'));
+  assert.equal(el.style.width, '48px', '24 DIP at 2 CSS px per DIP');
+  assert.equal(el.style.marginLeft, '-8px');
+
+  f.win('mousemove', { clientX: 300, clientY: 200, target: link });
+  assert.ok(el.innerHTML.includes('HAND'), 'hand over links');
+  assert.equal(el.style.marginLeft, '-16px');
+  f.win('mousemove', { clientX: 300, clientY: 650, target: element('P') });
+  assert.ok(el.innerHTML.includes('BEAM'), 'I-beam over text');
+  f.win('mousemove', { clientX: 320, clientY: 200, target: field });
+  assert.ok(el.innerHTML.includes('BEAM'), 'I-beam over text fields');
+
+  // Over an embedded frame the frame's own pointer shows instead.
+  f.win('pointerover', { target: element('IFRAME') });
+  assert.equal(el.style.display, 'none');
+  f.win('mousemove', { clientX: 400, clientY: 400, target: element('DIV') });
+  assert.equal(el.style.display, 'block');
+
+  // Leaving parks it; coming back resumes following.
+  window.__prism_set_cursor_stuck(true, 1930, 400);
+  assert.equal(el.style.transform, 'translate3d(1882px, 400px, 0)');
+  assert.ok(el.innerHTML.includes('ARROW'));
+  window.__prism_set_cursor_stuck(false);
+  assert.equal(el.style.display, 'block');
+  assert.equal(el.style.transform, 'translate3d(400px, 400px, 0)');
+
+  // Real fullscreen (scale 1): Chromium's own pointer is correct again.
+  window.__prism_cast_cursor_update({ cursor, cssPerDip: 1, live: false });
+  assert.equal(style.textContent, '');
+  assert.equal(el.style.display, 'none');
+  f.win('mousemove', { clientX: 410, clientY: 400, target: element('DIV') });
+  assert.equal(el.style.display, 'none');
+
+  // Cast end always restores the OS pointer.
+  window.__prism_cast_cursor_update({ cursor, cssPerDip: 2, live: true });
+  assert.notEqual(style.textContent, '');
+  f.win('__prism_tab_cast_change__', { detail: { active: false } });
+  assert.equal(style.textContent, '');
+  assert.equal(el.style.display, 'none');
 });
 
 test('screenshare parked pointer matches the OS pointer size through the fullscreen-lock scale and page zoom', () => {

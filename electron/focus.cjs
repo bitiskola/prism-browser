@@ -317,6 +317,7 @@ function patchDocument(rules, spoofOptions = {}) {
     }
     try { delete window.__prism_report_display_surface; } catch {}
     try { delete window.__prism_set_cursor_stuck; } catch {}
+    try { delete window.__prism_cast_cursor_update; } catch {}
     try { delete window.__prism_tab_cast_active; } catch {} 
     try { delete document[key]; } catch { /* Best effort if a page freezes the document. */ }
   };
@@ -1019,12 +1020,19 @@ function patchDocument(rules, spoofOptions = {}) {
     }
   }
 
-  // Screenshare cursor containment: while this tab is shared as a tab-only
-  // screencast and the real pointer is outside it, show a pointer parked ~1cm
-  // inside the edge it left through. The main process owns the inside/outside
-  // decision because it sees the OS pointer. In-page boundary events (element
-  // blur, mouseout) fire constantly while clicking or drag-selecting text and
-  // made the parked pointer flicker in the screencast.
+  // Screenshare cursor for tab-only screencasts of this tab.
+  //
+  // Parked: while the real pointer is outside the tab, a pointer is shown
+  // ~1cm inside the edge it left through. The main process reports leave and
+  // re-entry from the tab's own native mouse events (a global pointer position
+  // is not available on Wayland).
+  //
+  // Live: with the fullscreen lock active outside real fullscreen, Chromium
+  // places its captured pointer relative to the view while the captured
+  // surface is the larger emulated screen, so the pointer lands in the wrong
+  // spot. The OS pointer is then hidden over this page (which also removes it
+  // from the capture) and this page draws the pointer itself, so it is in the
+  // right place both locally and in the screencast.
   let onCursorCastChange;
   if (optScreenshareCursor) {
     const MARGIN_CM = 38; // ~1cm at standard 96 CSS DPI
@@ -1035,23 +1043,40 @@ function patchDocument(rules, spoofOptions = {}) {
     let lastX = Math.round(viewW() / 2);
     let lastY = Math.round(viewH() / 2);
     let hasInsidePosition = false;
+    let exitX = null;
+    let exitY = null;
     let cursorInfo = (spoofOptions.systemCursor && typeof spoofOptions.systemCursor === 'object') ? spoofOptions.systemCursor : null;
     let dipToCss = null;
     let dipToCssScale = 1;
     let renderedKey = '';
+    let live = false;
+    let parked = false;
+    let overFrame = false;
+    let shape = 'default';
+    let shapeTarget = null;
+    let shapeCheckedAt = 0;
+    let hideStyle = null;
 
     const isTopLevel = typeof window === 'undefined' || !window.top || window.top === window;
     const isTabCasting = () => Boolean(typeof window !== 'undefined' && window.__prism_tab_cast_active);
+    const isLive = () => live && isTopLevel && isTabCasting();
     const num = (value, fallback) => (typeof value === 'number' && Number.isFinite(value) ? value : fallback);
     const px = value => `${Math.round(value * 1000) / 1000}px`;
+    const tabScale = () => (typeof window !== 'undefined' && typeof window.__prism_tab_scale === 'number' && window.__prism_tab_scale > 0) ? window.__prism_tab_scale : 1;
     // Cursor metrics are in DIPs (what the OS draws). The page's CSS pixels are
     // scaled by the fullscreen-lock emulation (and page zoom), so convert them.
-    const tabScale = () => (typeof window !== 'undefined' && typeof window.__prism_tab_scale === 'number' && window.__prism_tab_scale > 0) ? window.__prism_tab_scale : 1;
     const cssPerDip = () => {
-      // The main process's factor also covers page zoom; follow later
-      // fullscreen-lock scale changes relative to the scale it was taken at.
       if (typeof dipToCss === 'number' && dipToCss > 0 && Number.isFinite(dipToCss)) return dipToCss * dipToCssScale / tabScale();
       return 1 / tabScale();
+    };
+    const setDipToCss = value => {
+      if (typeof value === 'number' && value > 0 && Number.isFinite(value)) {
+        dipToCss = value;
+        dipToCssScale = tabScale();
+      }
+    };
+    const setCursorInfo = value => {
+      if (value && typeof value === 'object' && value.dataUrl) cursorInfo = value;
     };
 
     let pointerEl = null;
@@ -1067,8 +1092,11 @@ function patchDocument(rules, spoofOptions = {}) {
       const pointer = document.createElement('div');
       pointer.id = '__prism_cast_pointer__';
       pointer.className = 'prism-cast-pointer';
-      pointer.style.cssText = 'position:fixed;top:0;left:0;pointer-events:none !important;user-select:none !important;z-index:2147483647 !important;display:none;';
+      pointer.style.cssText = 'position:fixed;top:0;left:0;pointer-events:none !important;user-select:none !important;z-index:2147483647 !important;display:none;will-change:transform;';
+      hideStyle = document.createElement('style');
+      hideStyle.textContent = '';
       cursorHost.appendChild(pointer);
+      cursorHost.appendChild(hideStyle);
       parent.appendChild(cursorHost);
       if (!cursorHost.parentNode) cursorHost.parentNode = parent;
       pointerEl = pointer;
@@ -1077,16 +1105,27 @@ function patchDocument(rules, spoofOptions = {}) {
       return pointerEl;
     };
 
-    const renderCursorImage = el => {
-      const info = cursorInfo && cursorInfo.dataUrl ? cursorInfo : null;
+    const setOsCursorHidden = hidden => {
+      if (!hidden && !hideStyle) return;
+      if (!ensureOverlayElement() || !hideStyle) return;
+      const css = hidden ? 'html,html *,html *::before,html *::after{cursor:none !important}' : '';
+      if (hideStyle.textContent !== css) hideStyle.textContent = css;
+    };
+
+    const shapeImage = name => {
+      const base = cursorInfo && cursorInfo.dataUrl ? cursorInfo : null;
+      if (name !== 'default' && base && base.shapes && base.shapes[name] && base.shapes[name].dataUrl) return base.shapes[name];
+      return base;
+    };
+
+    const renderCursorImage = (el, name) => {
+      const info = shapeImage(name);
       const k = cssPerDip();
-      const key = `${info ? info.dataUrl.length + ':' + info.dataUrl.slice(-32) : 'svg'}|${info ? [info.width, info.height, info.xhot, info.yhot] : ''}|${k}`;
+      const key = `${name}|${info ? info.dataUrl.length + ':' + info.dataUrl.slice(-32) : 'svg'}|${info ? [info.width, info.height, info.xhot, info.yhot] : ''}|${k}`;
       if (key === renderedKey) return;
       renderedKey = key;
-      const w = num(info && info.width, 24) * k;
-      const h = num(info && info.height, 24) * k;
-      el.style.width = px(w);
-      el.style.height = px(h);
+      el.style.width = px(num(info && info.width, 24) * k);
+      el.style.height = px(num(info && info.height, 24) * k);
       el.style.marginLeft = px(-num(info && info.xhot, 4) * k);
       el.style.marginTop = px(-num(info && info.yhot, 4) * k);
       el.innerHTML = info
@@ -1099,6 +1138,14 @@ function patchDocument(rules, spoofOptions = {}) {
       else if (cursorEl) cursorEl.style.display = 'none';
     };
 
+    const placeAt = (x, y, name) => {
+      const el = ensureOverlayElement();
+      if (!el) return;
+      renderCursorImage(el, name);
+      el.style.transform = 'translate3d(' + Math.round(x) + 'px, ' + Math.round(y) + 'px, 0)';
+      if (el.style.display !== 'block') el.style.display = 'block';
+    };
+
     const showParked = () => {
       if (!isTabCasting() || !isTopLevel) {
         hideOverlay();
@@ -1106,73 +1153,158 @@ function patchDocument(rules, spoofOptions = {}) {
       }
       const W = viewW();
       const H = viewH();
-      const x = Math.max(0, Math.min(W, lastX));
-      const y = Math.max(0, Math.min(H, lastY));
+      // The leave event's position (just past the edge) says which edge was
+      // crossed even after a fast flick; otherwise use the last in-page point.
+      let edge = '';
+      let px0 = lastX;
+      let py0 = lastY;
+      if (typeof exitX === 'number' && typeof exitY === 'number') {
+        const over = [['left', -exitX], ['right', exitX - W], ['top', -exitY], ['bottom', exitY - H]]
+          .sort((a, b) => b[1] - a[1])[0];
+        if (over[1] >= 0) { edge = over[0]; px0 = exitX; py0 = exitY; }
+      }
+      const x = Math.max(0, Math.min(W, px0));
+      const y = Math.max(0, Math.min(H, py0));
       const minD = Math.min(x, W - x, y, H - y);
+      if (!edge) edge = minD === x ? 'left' : minD === W - x ? 'right' : minD === y ? 'top' : 'bottom';
       let parkX;
       let parkY;
-      if (minD === x) {
+      if (edge === 'left') {
         parkX = MARGIN_CM;
         parkY = Math.max(MARGIN_CM, Math.min(H - MARGIN_CM, y));
-      } else if (minD === W - x) {
+      } else if (edge === 'right') {
         parkX = W - MARGIN_CM;
         parkY = Math.max(MARGIN_CM, Math.min(H - MARGIN_CM, y));
-      } else if (minD === y) {
+      } else if (edge === 'top') {
         parkX = Math.max(MARGIN_CM, Math.min(W - MARGIN_CM, x));
         parkY = MARGIN_CM;
       } else {
         parkX = Math.max(MARGIN_CM, Math.min(W - MARGIN_CM, x));
         parkY = H - MARGIN_CM;
       }
-      const el = ensureOverlayElement();
-      if (!el) return;
-      renderCursorImage(el);
-      el.style.transform = 'translate3d(' + Math.round(parkX) + 'px, ' + Math.round(parkY) + 'px, 0)';
-      el.style.display = 'block';
+      placeAt(parkX, parkY, 'default');
+    };
+
+    // Approximates the pointer the page would show: hand over links and
+    // buttons, I-beam over editable fields and text, arrow elsewhere.
+    const LINK_SELECTOR = 'a[href],area[href],button,summary,select,label,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[onclick],input[type="checkbox"],input[type="radio"],input[type="submit"],input[type="button"],input[type="reset"],input[type="image"],input[type="file"],input[type="color"],input[type="range"]';
+    const TEXT_INPUT = /^(text|search|email|url|tel|password|number|date|datetime-local|month|week|time)$/i;
+    const shapeAt = (target, x, y) => {
+      let el = target;
+      if (el && el.nodeType === 3) el = el.parentElement;
+      if (!el || el.nodeType !== 1) return 'default';
+      try {
+        if (typeof el.closest === 'function') {
+          if (el.closest('textarea,[contenteditable=""],[contenteditable="true"],[contenteditable="plaintext-only"]')) return 'text';
+          const input = el.closest('input');
+          if (input && TEXT_INPUT.test(input.type || 'text')) return 'text';
+          if (el.closest(LINK_SELECTOR)) return 'pointer';
+        }
+        if (typeof document.caretRangeFromPoint === 'function') {
+          const range = document.caretRangeFromPoint(x, y);
+          const node = range && range.startContainer;
+          if (node && node.nodeType === 3 && node.textContent && node.textContent.trim()) {
+            const r = document.createRange();
+            r.selectNodeContents(node);
+            for (const rect of r.getClientRects()) {
+              if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return 'text';
+            }
+          }
+        }
+      } catch {}
+      return 'default';
+    };
+
+    const now = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+    const drawLive = target => {
+      if (!isLive() || parked || overFrame) return;
+      const t = now();
+      if (target !== shapeTarget || t - shapeCheckedAt > 60) {
+        shapeTarget = target;
+        shapeCheckedAt = t;
+        shape = shapeAt(target, lastX, lastY);
+      }
+      placeAt(lastX, lastY, shape);
     };
 
     // Only remember where the pointer really was inside the page; positions
-    // outside the viewport come from drags or synthetic events, not from the
-    // edge the user actually left through.
+    // outside the viewport come from drags, not from where the user left.
     const onMove = e => {
       if (!e || e.isTrusted === false || typeof e.clientX !== 'number' || typeof e.clientY !== 'number') return;
       if (e.clientX < 0 || e.clientY < 0 || e.clientX >= viewW() || e.clientY >= viewH()) return;
       lastX = e.clientX;
       lastY = e.clientY;
       hasInsidePosition = true;
+      overFrame = false;
+      drawLive(typeof e.composedPath === 'function' ? (e.composedPath()[0] || e.target) : e.target);
+    };
+
+    // Embedded frames get their own pointer events; the OS pointer shows there.
+    const onOver = e => {
+      if (!e || e.isTrusted === false) return;
+      const tag = e.target && e.target.tagName ? String(e.target.tagName).toUpperCase() : '';
+      overFrame = tag === 'IFRAME' || tag === 'FRAME' || tag === 'EMBED' || tag === 'OBJECT';
+      if (overFrame && isLive() && !parked) hideOverlay();
+    };
+
+    const applyLive = () => {
+      setOsCursorHidden(isLive());
+      if (parked) {
+        showParked();
+      } else if (isLive() && hasInsidePosition && !overFrame) {
+        placeAt(lastX, lastY, shape);
+      } else {
+        hideOverlay();
+      }
     };
 
     onCursorCastChange = (e) => {
       const active = (e && e.detail && typeof e.detail.active === 'boolean') ? e.detail.active : isTabCasting();
       if (!active) {
-        hideOverlay();
+        live = false;
+        parked = false;
         hasInsidePosition = false;
+        setOsCursorHidden(false);
+        hideOverlay();
       }
     };
 
     if (typeof window !== 'undefined') {
       window.__prism_set_cursor_stuck = function(stuck, relX, relY, customCursor, cssPerDipFactor) {
-        if (customCursor && typeof customCursor === 'object' && customCursor.dataUrl) cursorInfo = customCursor;
-        if (typeof cssPerDipFactor === 'number' && cssPerDipFactor > 0 && Number.isFinite(cssPerDipFactor)) {
-          dipToCss = cssPerDipFactor;
-          dipToCssScale = tabScale();
-        }
+        setCursorInfo(customCursor);
+        setDipToCss(cssPerDipFactor);
         if (!stuck || !isTabCasting()) {
-          hideOverlay();
+          parked = false;
+          applyLive();
           return;
         }
-        // Prefer the last real in-page position: the main process samples the
-        // OS pointer slightly after it left, when it may already be far away.
-        if (!hasInsidePosition && typeof relX === 'number' && typeof relY === 'number') {
-          lastX = relX;
-          lastY = relY;
+        // relX/relY: where the pointer was when it left (CSS px, just outside).
+        exitX = (typeof relX === 'number' && Number.isFinite(relX)) ? relX : null;
+        exitY = (typeof relY === 'number' && Number.isFinite(relY)) ? relY : null;
+        if (!hasInsidePosition && exitX !== null && exitY !== null) {
+          lastX = exitX;
+          lastY = exitY;
         }
+        parked = true;
         showParked();
+      };
+      // Main process: cursor images, DIP->CSS factor and whether to draw the
+      // pointer in the page (fullscreen lock active outside real fullscreen).
+      window.__prism_cast_cursor_update = function(config) {
+        if (!config || typeof config !== 'object') return;
+        setCursorInfo(config.cursor);
+        setDipToCss(config.cssPerDip);
+        if (typeof config.live === 'boolean') live = config.live;
+        renderedKey = '';
+        applyLive();
       };
     }
 
     const onScaleChange = () => {
-      if (pointerEl && pointerEl.style.display === 'block') renderCursorImage(pointerEl);
+      if (pointerEl && pointerEl.style.display === 'block') {
+        if (parked) showParked();
+        else if (isLive()) placeAt(lastX, lastY, shape);
+      }
     };
 
     if (typeof window !== 'undefined' && window.addEventListener) {
@@ -1180,6 +1312,8 @@ function patchDocument(rules, spoofOptions = {}) {
         window.addEventListener(name, onMove, true);
         listeners.push([name, onMove]);
       }
+      window.addEventListener('pointerover', onOver, true);
+      listeners.push(['pointerover', onOver]);
       window.addEventListener('__prism_tab_scale_change__', onScaleChange, true);
       listeners.push(['__prism_tab_scale_change__', onScaleChange]);
     }

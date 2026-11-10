@@ -253,6 +253,33 @@ function positiveInt(value) {
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 512 ? parsed : 0;
 }
 
+// Fallback shapes when a theme lacks a text (I-beam) or link (hand) cursor.
+const FALLBACK_SHAPES = {
+  text: {
+    width: 24, height: 24, xhot: 12, yhot: 12,
+    dataUrl: 'data:image/svg+xml;utf8,' + encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">' +
+      '<path d="M8.5 3.5 H11 Q12 3.5 12 5 Q12 3.5 13 3.5 H15.5 M12 5 V19 M8.5 20.5 H11 Q12 20.5 12 19 Q12 20.5 13 20.5 H15.5 M9.5 12 H14.5" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>' +
+      '<path d="M8.5 3.5 H11 Q12 3.5 12 5 Q12 3.5 13 3.5 H15.5 M12 5 V19 M8.5 20.5 H11 Q12 20.5 12 19 Q12 20.5 13 20.5 H15.5 M9.5 12 H14.5" fill="none" stroke="#111111" stroke-width="1.3" stroke-linecap="round"/>' +
+      '</svg>'
+    )
+  },
+  pointer: {
+    width: 24, height: 24, xhot: 8, yhot: 2,
+    dataUrl: 'data:image/svg+xml;utf8,' + encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">' +
+      '<path d="M8 2.5 Q9.5 1 11 2.5 V10 L12 6.5 Q13.5 5.5 14.5 7 L15 9.5 Q16.5 8.5 17.5 10 L17.8 11.8 Q19.3 11 20 12.8 V16.5 Q20 21 15.5 22 H11.5 Q8.5 22 6.5 18.5 L3.6 13.2 Q3.2 11.4 5 11.6 L8 14 Z" fill="#ffffff" stroke="#111111" stroke-width="1.3" stroke-linejoin="round"/>' +
+      '</svg>'
+    )
+  }
+};
+
+const LINUX_SHAPE_NAMES = {
+  default: ['default', 'left_ptr', 'arrow', 'top_left_arrow'],
+  text: ['text', 'xterm', 'ibeam'],
+  pointer: ['pointer', 'hand2', 'hand1', 'pointing_hand'],
+};
+
 function getLinuxCursor(scaleFactor = 1) {
   let theme = '';
   let size = 0;
@@ -279,31 +306,34 @@ function getLinuxCursor(scaleFactor = 1) {
     '/usr/local/share/icons'
   ];
 
-  const candidateNames = ['default', 'left_ptr', 'arrow', 'top_left_arrow'];
-
-  for (const t of themesToTry) {
-    for (const d of searchDirs) {
-      const cursorDir = path.join(d, t, 'cursors');
-      for (const name of candidateNames) {
-        const filePath = path.join(cursorDir, name);
-        try {
-          if (fs.existsSync(filePath)) {
+  const load = names => {
+    for (const t of themesToTry) {
+      for (const d of searchDirs) {
+        for (const name of names) {
+          const filePath = path.join(d, t, 'cursors', name);
+          try {
+            if (!fs.existsSync(filePath)) continue;
             const fileBuf = fs.readFileSync(filePath);
+            // Chromium loads the theme image closest to size x scale and
+            // draws it 1:1 in physical pixels, i.e. image / scale in DIPs.
             const parsed = parseXcursor(fileBuf, physical);
-            if (parsed) {
-              // Chromium loads the theme image closest to size x scale and
-              // draws it 1:1 in physical pixels, i.e. image / scale in DIPs.
-              return { ...toDips(parsed, 1, scaleFactor), size, theme: t, platform: 'linux' };
-            }
+            if (parsed) return { ...toDips(parsed, 1, scaleFactor), theme: t };
             const cur = parseCurFile(fileBuf, physical);
-            if (cur) return { ...toDips(cur, size, cur.width), size, theme: t, platform: 'linux' };
-          }
-        } catch {}
+            if (cur) return { ...toDips(cur, size, cur.width), theme: t };
+          } catch {}
+        }
       }
     }
-  }
+    return null;
+  };
 
-  return { ...toDips(FALLBACK_SVGS.linux, size, FALLBACK_SVGS.linux.width), size, platform: 'linux', theme: theme || 'default' };
+  const arrow = load(LINUX_SHAPE_NAMES.default)
+    || { ...toDips(FALLBACK_SVGS.linux, size, FALLBACK_SVGS.linux.width), theme: theme || 'default' };
+  const shapes = {};
+  for (const name of ['text', 'pointer']) {
+    shapes[name] = load(LINUX_SHAPE_NAMES[name]) || toDips(FALLBACK_SHAPES[name], size, FALLBACK_SHAPES[name].width);
+  }
+  return { ...arrow, size, platform: 'linux', shapes };
 }
 
 function readRegistryValue(key, name) {
@@ -329,32 +359,34 @@ function getWindowsCursor(scaleFactor = 1) {
   }
   const physical = Math.max(1, Math.round(size * scaleFactor));
 
-  let cursorPath = '';
-  const arrow = readRegistryValue('HKCU\\Control Panel\\Cursors', 'Arrow');
-  if (arrow && arrow.value) {
-    cursorPath = arrow.value
-      .replace(/%SystemRoot%/gi, sysRoot)
-      .replace(/%windir%/gi, sysRoot)
-      .replace(/%USERPROFILE%/gi, os.homedir());
-  }
+  const load = (registryName, defaults) => {
+    let cursorPath = '';
+    const entry = readRegistryValue('HKCU\\Control Panel\\Cursors', registryName);
+    if (entry && entry.value) {
+      cursorPath = entry.value
+        .replace(/%SystemRoot%/gi, sysRoot)
+        .replace(/%windir%/gi, sysRoot)
+        .replace(/%USERPROFILE%/gi, os.homedir());
+    }
+    const candidates = [cursorPath, ...defaults.map(name => path.join(sysRoot, 'Cursors', name))].filter(Boolean);
+    for (const c of candidates) {
+      try {
+        if (fs.existsSync(c)) {
+          const parsed = parseCurFile(fs.readFileSync(c), physical);
+          if (parsed) return toDips(parsed, size, parsed.width);
+        }
+      } catch {}
+    }
+    return null;
+  };
 
-  const candidates = [
-    cursorPath,
-    path.join(sysRoot, 'Cursors', 'aero_arrow.cur'),
-    path.join(sysRoot, 'Cursors', 'arrow.cur')
-  ].filter(Boolean);
-
-  for (const c of candidates) {
-    try {
-      if (fs.existsSync(c)) {
-        const buf = fs.readFileSync(c);
-        const parsed = parseCurFile(buf, physical);
-        if (parsed) return { ...toDips(parsed, size, parsed.width), size, platform: 'win32' };
-      }
-    } catch {}
-  }
-
-  return { ...toDips(FALLBACK_SVGS.win32, size, FALLBACK_SVGS.win32.width), size, platform: 'win32' };
+  const arrow = load('Arrow', ['aero_arrow.cur', 'arrow.cur'])
+    || toDips(FALLBACK_SVGS.win32, size, FALLBACK_SVGS.win32.width);
+  const shapes = {
+    text: load('IBeam', ['beam_r.cur', 'beam_i.cur']) || toDips(FALLBACK_SHAPES.text, size, FALLBACK_SHAPES.text.width),
+    pointer: load('Hand', ['aero_link.cur']) || toDips(FALLBACK_SHAPES.pointer, size, FALLBACK_SHAPES.pointer.width),
+  };
+  return { ...arrow, size, platform: 'win32', shapes };
 }
 
 function getMacCursor() {
@@ -410,5 +442,6 @@ module.exports = {
   parseXcursor,
   parseCurFile,
   makePngFromRgba,
-  FALLBACK_SVGS
+  FALLBACK_SVGS,
+  FALLBACK_SHAPES
 };

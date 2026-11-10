@@ -120,3 +120,14 @@ test('FALLBACK_SVGS definitions contain valid SVGs for linux, win32, and darwin'
     assert.ok(fb.dataUrl.includes('data:image/svg+xml;'));
   }
 });
+
+test('getSystemCursorInfo also provides text (I-beam) and link (hand) shapes in DIPs', () => {
+  const info = getSystemCursorInfo({ scaleFactor: 2, forceRefresh: true });
+  for (const name of ['text', 'pointer']) {
+    const shape = info.shapes?.[name];
+    assert.ok(shape, `${name} shape exists`);
+    assert.ok(shape.width > 0 && shape.height > 0);
+    assert.ok(typeof shape.xhot === 'number' && typeof shape.yhot === 'number');
+    assert.ok(shape.dataUrl.startsWith('data:image/'));
+  }
+});

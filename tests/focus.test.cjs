@@ -121,7 +121,7 @@ test('reapplying is idempotent and current-context navigation away restores orig
   const firstListeners = [...fixture.listeners].map(([name, set]) => [name, [...set]]);
   fixture.apply(rules);
   assert.deepEqual([...fixture.listeners].map(([name, set]) => [name, [...set]]), firstListeners);
-  assert.equal([...fixture.listeners.values()].reduce((n, set) => n + set.size, 0), 40);
+  assert.equal([...fixture.listeners.values()].reduce((n, set) => n + set.size, 0), 41);
   fixture.document.location.href = 'https://other.test';
   fixture.apply(rules);
   assert.deepEqual(Object.getOwnPropertyDescriptor(fixture.document, 'hasFocus'), originalDescriptor);
